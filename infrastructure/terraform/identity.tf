@@ -27,21 +27,6 @@ resource "aws_dynamodb_table" "user_access" {
   }
 }
 
-resource "aws_dynamodb_table_item" "seed_user" {
-  table_name = aws_dynamodb_table.user_access.name
-  hash_key   = "username"
-
-  item = jsonencode({
-    username    = { S = "chris" }
-    displayName = { S = "Chris" }
-    apps = { M = {
-      scorchbook = { S = "admin" }
-      svap       = { S = "admin" }
-      canonry    = { S = "admin" }
-      ahara      = { S = "admin" }
-    } }
-  })
-}
 
 # =============================================================================
 # SonarQube Cognito Client (OAuth2 code flow for SonarQube OIDC plugin)

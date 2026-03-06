@@ -53,7 +53,7 @@ resource "aws_ce_anomaly_subscription" "platform" {
 
   monitor_arn_list = [aws_ce_anomaly_monitor.platform.arn]
 
-  frequency = "DAILY"
+  frequency = "IMMEDIATE"
 
   subscriber {
     type    = "SNS"

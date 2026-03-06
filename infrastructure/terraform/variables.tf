@@ -7,16 +7,16 @@ variable "domain_name" {
 variable "cognito_user_pool_name" {
   description = "Name for the shared Cognito user pool"
   type        = string
-  default     = "platform-users"
+  default     = "scorchbook-ffcf7631-users"
 }
 
 variable "cognito_clients" {
   description = "Map of app keys to Cognito client display names"
   type        = map(string)
   default = {
-    scorchbook = "scorchbook-app"
+    scorchbook = "scorchbook-ffcf7631-app"
     svap       = "svap-app"
-    canonry    = "canonry-app"
+    canonry    = "scorchbook-ffcf7631-canonry-app"
     ahara      = "ahara-app"
   }
 }

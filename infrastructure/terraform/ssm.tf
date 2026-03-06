@@ -28,11 +28,11 @@ resource "aws_ssm_parameter" "cognito_domain" {
 
 # Per-app client IDs
 resource "aws_ssm_parameter" "cognito_client_ids" {
-  for_each = module.cognito.client_ids
+  for_each = var.cognito_clients
 
   name  = "${local.ssm_prefix}/cognito/clients/${each.key}"
   type  = "String"
-  value = each.value
+  value = module.cognito.client_ids[each.key]
 }
 
 # SonarQube client (separate because it has a secret)
