@@ -1,5 +1,7 @@
 use aws_sdk_s3::Client as S3Client;
+use aws_sdk_ssm::Client as SsmClient;
 use lambda_runtime::{service_fn, Error, LambdaEvent};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -142,7 +144,92 @@ async fn connect_to(db_name: &str) -> Result<Client, Error> {
     Ok(client)
 }
 
-async fn ensure_database(db_name: &str) -> Result<(), Error> {
+fn generate_password() -> String {
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut rng = rand::thread_rng();
+    (0..32)
+        .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
+        .collect()
+}
+
+/// Ensures the project database exists with an application role and SSM credentials.
+/// Creates database, app role, grants, and publishes credentials to SSM if needed.
+async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Result<(), Error> {
+    let pg = connect_to("postgres").await?;
+
+    // Create database if needed
+    let rows = pg
+        .query("SELECT 1 FROM pg_database WHERE datname = $1", &[&db_name])
+        .await?;
+    if rows.is_empty() {
+        info!(db = db_name, "Creating database");
+        pg.batch_execute(&format!("CREATE DATABASE \"{db_name}\""))
+            .await?;
+    }
+
+    // Create app role if needed
+    let role_name = format!("{project}_app");
+    let role_rows = pg
+        .query("SELECT 1 FROM pg_roles WHERE rolname = $1", &[&role_name])
+        .await?;
+    if role_rows.is_empty() {
+        let password = generate_password();
+        info!(project, role = role_name, "Creating application role");
+
+        pg.batch_execute(&format!(
+            "CREATE ROLE \"{role_name}\" LOGIN PASSWORD '{password}'"
+        ))
+        .await?;
+
+        // Grant permissions on the database
+        pg.batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\""
+        ))
+        .await?;
+
+        // Connect to the project database to set default privileges
+        let db = connect_to(db_name).await?;
+        db.batch_execute(&format!(
+            "GRANT ALL ON SCHEMA public TO \"{role_name}\";
+             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO \"{role_name}\";
+             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";"
+        ))
+        .await?;
+
+        // Publish credentials to SSM
+        let ssm_prefix = format!("/platform/db/{project}");
+
+        ssm.put_parameter()
+            .name(format!("{ssm_prefix}/username"))
+            .r#type(aws_sdk_ssm::types::ParameterType::String)
+            .value(&role_name)
+            .overwrite(true)
+            .send()
+            .await?;
+
+        ssm.put_parameter()
+            .name(format!("{ssm_prefix}/password"))
+            .r#type(aws_sdk_ssm::types::ParameterType::SecureString)
+            .value(&password)
+            .overwrite(true)
+            .send()
+            .await?;
+
+        ssm.put_parameter()
+            .name(format!("{ssm_prefix}/database"))
+            .r#type(aws_sdk_ssm::types::ParameterType::String)
+            .value(db_name)
+            .overwrite(true)
+            .send()
+            .await?;
+
+        info!(project, role = role_name, "App role created and credentials published to SSM");
+    }
+
+    Ok(())
+}
+
+async fn ensure_database_bare(db_name: &str) -> Result<(), Error> {
     let pg = connect_to("postgres").await?;
     let rows = pg
         .query("SELECT 1 FROM pg_database WHERE datname = $1", &[&db_name])
@@ -156,7 +243,7 @@ async fn ensure_database(db_name: &str) -> Result<(), Error> {
 }
 
 async fn get_ops_client() -> Result<Client, Error> {
-    ensure_database(OPS_DB).await?;
+    ensure_database_bare(OPS_DB).await?;
     let client = connect_to(OPS_DB).await?;
     client.batch_execute(OPS_SCHEMA).await?;
     Ok(client)
@@ -256,8 +343,8 @@ fn bucket() -> String {
 // Operations
 // =============================================================================
 
-async fn migrate(s3: &S3Client, project: &str, config: &ProjectConfig) -> Result<Response, Error> {
-    ensure_database(&config.db_name).await?;
+async fn migrate(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig) -> Result<Response, Error> {
+    ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
     let db = connect_to(&config.db_name).await?;
     let bucket = bucket();
@@ -489,8 +576,8 @@ async fn drop_db(project: &str, config: &ProjectConfig) -> Result<Response, Erro
     result
 }
 
-async fn noop(s3: &S3Client, project: &str, config: &ProjectConfig, target: &str, comment: &str) -> Result<Response, Error> {
-    ensure_database(&config.db_name).await?;
+async fn noop(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig, target: &str, comment: &str) -> Result<Response, Error> {
+    ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
     let db = connect_to(&config.db_name).await?;
     let bucket = bucket();
@@ -539,8 +626,8 @@ async fn noop(s3: &S3Client, project: &str, config: &ProjectConfig, target: &str
     result
 }
 
-async fn restore(s3: &S3Client, project: &str, config: &ProjectConfig, target: &str, comment: &str) -> Result<Response, Error> {
-    ensure_database(&config.db_name).await?;
+async fn restore(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig, target: &str, comment: &str) -> Result<Response, Error> {
+    ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
     let bucket = bucket();
 
@@ -627,8 +714,9 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
     let (payload, _ctx) = event.into_parts();
     info!(event = %payload, "Event received");
 
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let s3 = S3Client::new(&config);
+    let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let s3 = S3Client::new(&aws_config);
+    let ssm = SsmClient::new(&aws_config);
 
     let evt: MigrationEvent = serde_json::from_value(payload)?;
 
@@ -646,7 +734,7 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
                 return Ok(serde_json::json!({"status": "ignored"}));
             }
             let cfg = require_project(project)?;
-            migrate(&s3, project, &cfg).await?
+            migrate(&s3, &ssm, project, &cfg).await?
         }
         MigrationEvent::Manual {
             operation,
@@ -656,19 +744,19 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
         } => {
             let cfg = require_project(&project)?;
             match operation.as_str() {
-                "migrate" => migrate(&s3, &project, &cfg).await?,
+                "migrate" => migrate(&s3, &ssm, &project, &cfg).await?,
                 "rollback" => rollback(&s3, &project, &cfg, target.as_deref()).await?,
                 "seed" => seed(&s3, &project, &cfg).await?,
                 "drop" => drop_db(&project, &cfg).await?,
                 "noop" => {
                     let t = target.as_deref().ok_or("noop requires target")?;
                     let c = comment.as_deref().ok_or("noop requires comment")?;
-                    noop(&s3, &project, &cfg, t, c).await?
+                    noop(&s3, &ssm, &project, &cfg, t, c).await?
                 }
                 "restore" => {
                     let t = target.as_deref().ok_or("restore requires target")?;
                     let c = comment.as_deref().ok_or("restore requires comment")?;
-                    restore(&s3, &project, &cfg, t, c).await?
+                    restore(&s3, &ssm, &project, &cfg, t, c).await?
                 }
                 _ => return Err(format!("Unknown operation: {operation}").into()),
             }

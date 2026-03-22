@@ -16,6 +16,7 @@ variable "migration_projects" {
   default = {
     platform = { db_name = "platform" }
     svap     = { db_name = "svap" }
+    dosekit  = { db_name = "dosekit" }
   }
 }
 
@@ -68,16 +69,23 @@ resource "aws_iam_role_policy_attachment" "db_migrate_vpc" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
-resource "aws_iam_role_policy" "db_migrate_s3" {
-  name = "platform-db-migrate-s3"
+resource "aws_iam_role_policy" "db_migrate_s3_ssm" {
+  name = "platform-db-migrate-s3-ssm"
   role = aws_iam_role.db_migrate.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["s3:GetObject", "s3:ListBucket"]
-      Resource = [aws_s3_bucket.migrations.arn, "${aws_s3_bucket.migrations.arn}/*"]
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:ListBucket"]
+        Resource = [aws_s3_bucket.migrations.arn, "${aws_s3_bucket.migrations.arn}/*"]
+      },
+      {
+        Effect = "Allow"
+        Action = ["ssm:PutParameter", "ssm:GetParameter"]
+        Resource = ["arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/platform/db/*"]
+      }
+    ]
   })
 }
 
