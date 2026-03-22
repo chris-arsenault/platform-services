@@ -21,5 +21,6 @@ rustls-pki-types = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }

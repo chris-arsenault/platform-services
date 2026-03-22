@@ -888,6 +888,7 @@ dependencies = [
 name = "db-migrate"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "aws-config",
  "aws-sdk-s3",
  "aws-sdk-ssm",
@@ -899,6 +900,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "testcontainers",
+ "testcontainers-modules",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
