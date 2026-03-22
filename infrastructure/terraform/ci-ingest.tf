@@ -4,7 +4,7 @@
 
 data "archive_file" "ci_ingest" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/ci-ingest/dist/handler.js"
+  source_file = "${path.module}/../../apps/target/lambda/ci-ingest/bootstrap"
   output_path = "${path.module}/ci-ingest-lambda.zip"
 }
 
@@ -44,8 +44,8 @@ resource "random_password" "ci_ingest_token" {
 resource "aws_lambda_function" "ci_ingest" {
   function_name = "platform-ci-ingest"
   role          = aws_iam_role.ci_ingest.arn
-  handler       = "handler.handler"
-  runtime       = "nodejs24.x"
+  handler       = "bootstrap"
+  runtime       = "provided.al2023"
 
   filename         = data.archive_file.ci_ingest.output_path
   source_code_hash = data.archive_file.ci_ingest.output_base64sha256

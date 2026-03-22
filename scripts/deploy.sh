@@ -16,6 +16,9 @@ echo "Building auth-trigger Lambda..."
 AUTH_DIR="${ROOT_DIR}/apps/auth-trigger"
 (cd "${AUTH_DIR}" && npm ci && npm run build)
 
+echo "Building Rust Lambdas..."
+(cd "${ROOT_DIR}/apps" && cargo lambda build --release)
+
 echo "Initializing Terraform backend..."
 tf init -reconfigure \
   -backend-config="bucket=${STATE_BUCKET}" \

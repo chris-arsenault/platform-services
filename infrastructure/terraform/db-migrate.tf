@@ -49,7 +49,7 @@ resource "aws_s3_bucket_public_access_block" "migrations" {
 
 data "archive_file" "db_migrate" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/db-migrate/dist/handler.js"
+  source_file = "${path.module}/../../apps/target/lambda/db-migrate/bootstrap"
   output_path = "${path.module}/db-migrate-lambda.zip"
 }
 
@@ -97,8 +97,8 @@ resource "aws_security_group" "db_migrate" {
 resource "aws_lambda_function" "db_migrate" {
   function_name = "platform-db-migrate"
   role          = aws_iam_role.db_migrate.arn
-  handler       = "handler.handler"
-  runtime       = "nodejs24.x"
+  handler       = "bootstrap"
+  runtime       = "provided.al2023"
 
   filename         = data.archive_file.db_migrate.output_path
   source_code_hash = data.archive_file.db_migrate.output_base64sha256
