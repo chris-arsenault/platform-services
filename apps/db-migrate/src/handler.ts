@@ -139,10 +139,8 @@ async function audit(
 
 async function acquireLock(client: Client, project: string): Promise<void> {
   const lockId = Math.abs(hashCode(project));
-  const result = await client.query("SELECT pg_try_advisory_lock($1)", [lockId]);
-  if (!result.rows[0].pg_try_advisory_lock) {
-    throw new Error(`Could not acquire lock for project "${project}" — another migration is running`);
-  }
+  // Blocking lock — waits for any concurrent migration to finish rather than failing
+  await client.query("SELECT pg_advisory_lock($1)", [lockId]);
   log("debug", "Lock acquired", { project, lockId });
 }
 

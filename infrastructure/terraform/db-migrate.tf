@@ -45,11 +45,6 @@ resource "aws_s3_bucket_public_access_block" "migrations" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_notification" "migrations" {
-  bucket      = aws_s3_bucket.migrations.id
-  eventbridge = true
-}
-
 # --- Lambda ---
 
 data "archive_file" "db_migrate" {
@@ -126,34 +121,6 @@ resource "aws_lambda_function" "db_migrate" {
       PROJECT_MAP       = jsonencode({ for k, v in var.migration_projects : k => v })
     }
   }
-}
-
-# --- EventBridge rule: trigger on migration file uploads ---
-
-resource "aws_cloudwatch_event_rule" "migration_upload" {
-  name = "platform-db-migration-trigger"
-
-  event_pattern = jsonencode({
-    source      = ["aws.s3"]
-    detail-type = ["Object Created"]
-    detail = {
-      bucket = { name = [aws_s3_bucket.migrations.id] }
-      object = { key = [{ prefix = "migrations/" }] }
-    }
-  })
-}
-
-resource "aws_cloudwatch_event_target" "migration_lambda" {
-  rule = aws_cloudwatch_event_rule.migration_upload.name
-  arn  = aws_lambda_function.db_migrate.arn
-}
-
-resource "aws_lambda_permission" "eventbridge_migrate" {
-  statement_id  = "AllowEventBridgeInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.db_migrate.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.migration_upload.arn
 }
 
 # --- SSM outputs ---
