@@ -433,9 +433,10 @@ async function restore(project: string, config: ProjectConfig, target: string, c
     await acquireLock(ops, project);
     await db.query(LOCAL_TRACKING);
 
-    // Restore the dump
+    // Restore the dump (strip psql metacommands that pg client can't execute)
     log("info", "Restoring from S3", { project, key: target });
-    const sql = await readFile(target);
+    const raw = await readFile(target);
+    const sql = raw.split("\n").filter((line) => !line.startsWith("\\")).join("\n");
     const start = Date.now();
     await db.query(sql);
     const dur = Date.now() - start;
