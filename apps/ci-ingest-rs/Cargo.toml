@@ -3,6 +3,10 @@ name = "ci-ingest"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "ci_ingest"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ci-ingest"
 path = "src/main.rs"
@@ -21,3 +25,8 @@ rustls-pki-types.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+testcontainers.workspace = true
+testcontainers-modules.workspace = true
+tokio-postgres = { workspace = true }

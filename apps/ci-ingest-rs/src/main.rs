@@ -1,43 +1,15 @@
+mod db;
+
+use db::{BuildReport, BuildRow, SummaryRow};
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::env;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 use tokio_postgres::Client;
 use tracing::{error, info};
 
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS ci_builds (
-  id SERIAL PRIMARY KEY,
-  repo TEXT NOT NULL,
-  workflow TEXT NOT NULL,
-  status TEXT NOT NULL,
-  branch TEXT NOT NULL,
-  commit_sha TEXT NOT NULL,
-  run_id TEXT NOT NULL UNIQUE,
-  run_url TEXT,
-  duration_seconds INTEGER,
-  lint_passed BOOLEAN,
-  test_passed BOOLEAN,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_ci_builds_repo ON ci_builds (repo, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ci_builds_status ON ci_builds (status, created_at DESC);
-";
-
-#[derive(Deserialize)]
-struct BuildReport {
-    repo: Option<String>,
-    workflow: Option<String>,
-    status: Option<String>,
-    branch: Option<String>,
-    commit_sha: Option<String>,
-    run_id: Option<String>,
-    run_url: Option<String>,
-    duration_seconds: Option<i32>,
-    lint_passed: Option<bool>,
-    test_passed: Option<bool>,
-}
+const RDS_CA_BUNDLE: &[u8] = include_bytes!("../../certs/rds-global-bundle.pem");
 
 #[derive(Serialize)]
 struct JsonResponse {
@@ -48,8 +20,6 @@ struct JsonResponse {
 }
 
 static DB: OnceLock<Mutex<Option<Client>>> = OnceLock::new();
-
-const RDS_CA_BUNDLE: &[u8] = include_bytes!("../../certs/rds-global-bundle.pem");
 
 fn make_tls_connector() -> tokio_postgres_rustls::MakeRustlsConnect {
     let mut root_store = rustls::RootCertStore::empty();
@@ -82,7 +52,7 @@ async fn get_client() -> Result<Client, Error> {
             error!("DB connection error: {e}");
         }
     });
-    client.batch_execute(SCHEMA).await?;
+    db::init_schema(&client).await?;
     Ok(client)
 }
 
@@ -109,38 +79,23 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
     info!(method, path, "Request");
 
     let guard = ensure_client().await?;
-    let db = guard.as_ref().unwrap();
+    let client = guard.as_ref().unwrap();
 
     match (method, path) {
         ("POST", "/api/ci/report") => {
             let body = std::str::from_utf8(req.body().as_ref()).unwrap_or("{}");
             let report: BuildReport = serde_json::from_str(body)?;
 
-            // Validate required fields
-            let repo = report.repo.as_deref().unwrap_or("");
-            let workflow = report.workflow.as_deref().unwrap_or("");
-            let status = report.status.as_deref().unwrap_or("");
-            let branch = report.branch.as_deref().unwrap_or("");
-            let commit_sha = report.commit_sha.as_deref().unwrap_or("");
-            let run_id = report.run_id.as_deref().unwrap_or("");
-
-            if repo.is_empty()
-                || workflow.is_empty()
-                || status.is_empty()
-                || branch.is_empty()
-                || commit_sha.is_empty()
-                || run_id.is_empty()
-            {
+            if let Err(msg) = db::validate_report(&report) {
                 return json_response(
                     400,
                     JsonResponse {
                         ok: None,
-                        error: Some("Missing required fields".into()),
+                        error: Some(msg.into()),
                     },
                 );
             }
 
-            // Token auth
             if let Ok(token) = env::var("INGEST_TOKEN") {
                 let auth = req
                     .headers()
@@ -159,23 +114,7 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
                 }
             }
 
-            db.execute(
-                "INSERT INTO ci_builds (repo, workflow, status, branch, commit_sha, run_id, run_url, duration_seconds, lint_passed, test_passed)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                 ON CONFLICT (run_id) DO UPDATE SET
-                   status = EXCLUDED.status,
-                   duration_seconds = EXCLUDED.duration_seconds,
-                   lint_passed = EXCLUDED.lint_passed,
-                   test_passed = EXCLUDED.test_passed",
-                &[
-                    &repo, &workflow, &status, &branch, &commit_sha, &run_id,
-                    &report.run_url.as_deref(),
-                    &report.duration_seconds,
-                    &report.lint_passed,
-                    &report.test_passed,
-                ],
-            ).await?;
-
+            db::upsert_build(client, &report).await?;
             json_response(
                 200,
                 JsonResponse {
@@ -186,62 +125,12 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
         }
 
         ("GET", "/api/ci/builds") => {
-            let rows = db
-                .query(
-                    "SELECT repo, workflow, status, branch, commit_sha, run_id, run_url,
-                        duration_seconds, lint_passed, test_passed, created_at
-                 FROM ci_builds ORDER BY created_at DESC LIMIT 100",
-                    &[],
-                )
-                .await?;
-
-            let builds: Vec<serde_json::Value> = rows
-                .iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "repo": r.get::<_, String>(0),
-                        "workflow": r.get::<_, String>(1),
-                        "status": r.get::<_, String>(2),
-                        "branch": r.get::<_, String>(3),
-                        "commit_sha": r.get::<_, String>(4),
-                        "run_id": r.get::<_, String>(5),
-                        "run_url": r.get::<_, Option<String>>(6),
-                        "duration_seconds": r.get::<_, Option<i32>>(7),
-                        "lint_passed": r.get::<_, Option<bool>>(8),
-                        "test_passed": r.get::<_, Option<bool>>(9),
-                        "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10).to_rfc3339(),
-                    })
-                })
-                .collect();
-
+            let builds: Vec<BuildRow> = db::get_builds(client).await?;
             json_response(200, builds)
         }
 
         ("GET", "/api/ci/summary") => {
-            let rows = db
-                .query(
-                    "SELECT DISTINCT ON (repo, workflow)
-                        repo, workflow, status, branch, commit_sha, run_url, created_at
-                 FROM ci_builds ORDER BY repo, workflow, created_at DESC",
-                    &[],
-                )
-                .await?;
-
-            let summary: Vec<serde_json::Value> = rows
-                .iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "repo": r.get::<_, String>(0),
-                        "workflow": r.get::<_, String>(1),
-                        "status": r.get::<_, String>(2),
-                        "branch": r.get::<_, String>(3),
-                        "commit_sha": r.get::<_, String>(4),
-                        "run_url": r.get::<_, Option<String>>(5),
-                        "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
-                    })
-                })
-                .collect();
-
+            let summary: Vec<SummaryRow> = db::get_summary(client).await?;
             json_response(200, summary)
         }
 

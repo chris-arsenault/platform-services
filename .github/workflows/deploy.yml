@@ -1,26 +1,55 @@
-name: Deploy
+name: CI/CD
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: platform-services-deploy
-  cancel-in-progress: false
+  group: platform-services-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  deploy:
+  lint-and-test:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Rust fmt
+        working-directory: apps
+        run: cargo fmt --check
+      - name: Rust clippy
+        working-directory: apps
+        run: cargo clippy -- -D warnings
+      - name: Rust tests
+        working-directory: apps
+        run: cargo test
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive infrastructure/terraform/
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: [lint-and-test]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: platform-services-deploy
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall -y cargo-lambda
       - uses: hashicorp/setup-terraform@v4
       - uses: aws-actions/configure-aws-credentials@v5
         with:
