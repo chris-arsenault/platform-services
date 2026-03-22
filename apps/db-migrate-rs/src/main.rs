@@ -136,11 +136,9 @@ fn make_tls_connector() -> tokio_postgres_rustls::MakeRustlsConnect {
     tokio_postgres_rustls::MakeRustlsConnect::new(config)
 }
 
-async fn connect_to(db_name: &str) -> Result<Client, Error> {
+async fn connect_with(db_name: &str, user: &str, password: &str) -> Result<Client, Error> {
     let host = env::var("DB_HOST")?;
     let port = env::var("DB_PORT").unwrap_or_else(|_| "5432".into());
-    let user = env::var("DB_USER")?;
-    let password = env::var("DB_PASSWORD")?;
     let connstr = format!(
         "host={host} port={port} user={user} password={password} dbname={db_name} sslmode=require"
     );
@@ -152,6 +150,28 @@ async fn connect_to(db_name: &str) -> Result<Client, Error> {
         }
     });
     Ok(client)
+}
+
+/// Connect using master credentials from env vars (for admin operations)
+async fn connect_to(db_name: &str) -> Result<Client, Error> {
+    let user = env::var("DB_USER")?;
+    let password = env::var("DB_PASSWORD")?;
+    connect_with(db_name, &user, &password).await
+}
+
+/// Connect using the project's app role credentials from SSM
+async fn connect_as_app(project: &str, db_name: &str, ssm: &SsmClient) -> Result<Client, Error> {
+    let prefix = format!("/platform/db/{project}");
+    let user = ssm.get_parameter()
+        .name(format!("{prefix}/username"))
+        .send().await?
+        .parameter().ok_or("SSM param not found")?.value().ok_or("empty value")?.to_string();
+    let password = ssm.get_parameter()
+        .name(format!("{prefix}/password"))
+        .with_decryption(true)
+        .send().await?
+        .parameter().ok_or("SSM param not found")?.value().ok_or("empty value")?.to_string();
+    connect_with(db_name, &user, &password).await
 }
 
 fn generate_password() -> String {
@@ -177,7 +197,7 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
             .await?;
     }
 
-    // Create app role if needed
+    // Create app role if needed, publish credentials to SSM
     let role_name = format!("{project}_app");
     let role_rows = pg
         .query("SELECT 1 FROM pg_roles WHERE rolname = $1", &[&role_name])
@@ -188,21 +208,6 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
 
         pg.batch_execute(&format!(
             "CREATE ROLE \"{role_name}\" LOGIN PASSWORD '{password}'"
-        ))
-        .await?;
-
-        // Grant permissions on the database
-        pg.batch_execute(&format!(
-            "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\""
-        ))
-        .await?;
-
-        // Connect to the project database to set default privileges
-        let db = connect_to(db_name).await?;
-        db.batch_execute(&format!(
-            "GRANT ALL ON SCHEMA public TO \"{role_name}\";
-             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO \"{role_name}\";
-             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";"
         ))
         .await?;
 
@@ -235,6 +240,20 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
 
         info!(project, role = role_name, "App role created and credentials published to SSM");
     }
+
+    // Always ensure grants are in place (idempotent — covers fresh databases after drop)
+    pg.batch_execute(&format!(
+        "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\""
+    )).await?;
+
+    let db = connect_to(db_name).await?;
+    db.batch_execute(&format!(
+        "GRANT ALL ON SCHEMA public TO \"{role_name}\";
+         ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO \"{role_name}\";
+         ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";
+         GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{role_name}\";
+         GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{role_name}\";"
+    )).await?;
 
     Ok(())
 }
@@ -358,7 +377,7 @@ fn bucket() -> String {
 async fn migrate(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig) -> Result<Response, Error> {
     ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
-    let db = connect_to(&config.db_name).await?;
+    let db = connect_as_app(project, &config.db_name, ssm).await?;
     let bucket = bucket();
 
     acquire_lock(&ops, project).await?;
@@ -430,9 +449,9 @@ async fn migrate(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Project
     result
 }
 
-async fn rollback(s3: &S3Client, project: &str, config: &ProjectConfig, target: Option<&str>) -> Result<Response, Error> {
+async fn rollback(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig, target: Option<&str>) -> Result<Response, Error> {
     let ops = get_ops_client().await?;
-    let db = connect_to(&config.db_name).await?;
+    let db = connect_as_app(project, &config.db_name, ssm).await?;
     let bucket = bucket();
 
     acquire_lock(&ops, project).await?;
@@ -505,7 +524,7 @@ async fn rollback(s3: &S3Client, project: &str, config: &ProjectConfig, target: 
     result
 }
 
-async fn seed(s3: &S3Client, project: &str, config: &ProjectConfig) -> Result<Response, Error> {
+async fn seed(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig) -> Result<Response, Error> {
     let bucket = bucket();
     let seed_files = list_files(s3, &bucket, &format!("migrations/{project}/seed/")).await?;
     if seed_files.is_empty() {
@@ -519,7 +538,7 @@ async fn seed(s3: &S3Client, project: &str, config: &ProjectConfig) -> Result<Re
     }
 
     let ops = get_ops_client().await?;
-    let db = connect_to(&config.db_name).await?;
+    let db = connect_as_app(project, &config.db_name, ssm).await?;
 
     acquire_lock(&ops, project).await?;
     let result = async {
@@ -591,7 +610,7 @@ async fn drop_db(project: &str, config: &ProjectConfig) -> Result<Response, Erro
 async fn noop(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig, target: &str, comment: &str) -> Result<Response, Error> {
     ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
-    let db = connect_to(&config.db_name).await?;
+    let db = connect_as_app(project, &config.db_name, ssm).await?;
     let bucket = bucket();
 
     acquire_lock(&ops, project).await?;
@@ -679,8 +698,17 @@ async fn restore(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Project
         let dur = start.elapsed().as_millis() as u64;
         info!(project, key = target, duration_ms = dur, "SQL restored");
 
-        // Create tracking table and baseline migrations
+        // Re-grant app role permissions on the fresh database
+        let role_name = format!("{project}_app");
         db.batch_execute("SET search_path TO public").await?;
+        db.batch_execute(&format!(
+            "GRANT ALL ON SCHEMA public TO \"{role_name}\";
+             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO \"{role_name}\";
+             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";
+             GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{role_name}\";
+             GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{role_name}\";"
+        )).await?;
+
         db.batch_execute(LOCAL_TRACKING).await?;
 
         let migration_files = list_files(s3, &bucket, &format!("migrations/{project}/")).await?;
@@ -757,8 +785,8 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
             let cfg = require_project(&project)?;
             match operation.as_str() {
                 "migrate" => migrate(&s3, &ssm, &project, &cfg).await?,
-                "rollback" => rollback(&s3, &project, &cfg, target.as_deref()).await?,
-                "seed" => seed(&s3, &project, &cfg).await?,
+                "rollback" => rollback(&s3, &ssm, &project, &cfg, target.as_deref()).await?,
+                "seed" => seed(&s3, &ssm, &project, &cfg).await?,
                 "drop" => drop_db(&project, &cfg).await?,
                 "noop" => {
                     let t = target.as_deref().ok_or("noop requires target")?;
