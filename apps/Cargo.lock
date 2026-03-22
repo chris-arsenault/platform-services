@@ -667,6 +667,8 @@ dependencies = [
  "chrono",
  "lambda_http",
  "rustls 0.23.37",
+ "rustls-pemfile",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "tokio",
@@ -674,7 +676,6 @@ dependencies = [
  "tokio-postgres-rustls",
  "tracing",
  "tracing-subscriber",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -795,6 +796,8 @@ dependencies = [
  "lambda_runtime",
  "rand 0.8.5",
  "rustls 0.23.37",
+ "rustls-pemfile",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
@@ -803,7 +806,6 @@ dependencies = [
  "tokio-postgres-rustls",
  "tracing",
  "tracing-subscriber",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -2138,6 +2140,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2982,24 +2993,6 @@ checksum = "854ba17bb104abfb26ba36da9729addc7ce7f06f5c0f90f3c391f8461cca21f9"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.6",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]

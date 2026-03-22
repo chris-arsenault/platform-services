@@ -117,45 +117,21 @@ fn require_project(project: &str) -> Result<ProjectConfig, Error> {
         .ok_or_else(|| format!("Project \"{project}\" is not registered").into())
 }
 
-/// RDS uses AWS-issued certs not in the public webpki trust store.
-/// Since we're in a private VPC connecting to a private RDS endpoint,
-/// we skip certificate verification (same as the TS `rejectUnauthorized: false`).
-#[derive(Debug)]
-struct NoVerify;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerify {
-    fn verify_server_cert(
-        &self, _: &rustls::pki_types::CertificateDer<'_>, _: &[rustls::pki_types::CertificateDer<'_>],
-        _: &rustls::pki_types::ServerName<'_>, _: &[u8], _: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self, _: &[u8], _: &rustls::pki_types::CertificateDer<'_>,
-        _: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self, _: &[u8], _: &rustls::pki_types::CertificateDer<'_>,
-        _: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
+/// AWS RDS CA bundle embedded at build time.
+/// Source: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+const RDS_CA_BUNDLE: &[u8] = include_bytes!("../../certs/rds-global-bundle.pem");
 
 fn make_tls_connector() -> tokio_postgres_rustls::MakeRustlsConnect {
+    let mut root_store = rustls::RootCertStore::empty();
+    let certs: Vec<rustls_pki_types::CertificateDer<'_>> =
+        rustls_pemfile::certs(&mut &RDS_CA_BUNDLE[..])
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Failed to parse RDS CA bundle");
+    for cert in certs {
+        root_store.add(cert).expect("Failed to add RDS CA cert");
+    }
     let config = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
+        .with_root_certificates(root_store)
         .with_no_client_auth();
     tokio_postgres_rustls::MakeRustlsConnect::new(config)
 }
