@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
-use std::sync::Arc;
 use tokio_postgres::Client;
 use tracing::{error, info, warn};
 
@@ -68,13 +67,7 @@ enum MigrationEvent {
 
 #[derive(Deserialize)]
 struct S3Detail {
-    bucket: S3Bucket,
     object: S3Object,
-}
-
-#[derive(Deserialize)]
-struct S3Bucket {
-    name: String,
 }
 
 #[derive(Deserialize)]
