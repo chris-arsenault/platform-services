@@ -36,11 +36,6 @@ resource "aws_security_group" "ci_ingest" {
   }
 }
 
-resource "random_password" "ci_ingest_db" {
-  length  = 24
-  special = false
-}
-
 resource "random_password" "ci_ingest_token" {
   length  = 32
   special = false
@@ -65,11 +60,11 @@ resource "aws_lambda_function" "ci_ingest" {
 
   environment {
     variables = {
-      DB_HOST      = aws_db_instance.platform.address
-      DB_PORT      = tostring(aws_db_instance.platform.port)
-      DB_USER      = "ci_ingest"
-      DB_PASSWORD  = random_password.ci_ingest_db.result
-      DB_NAME      = "platform"
+      DB_HOST     = aws_db_instance.platform.address
+      DB_PORT     = tostring(aws_db_instance.platform.port)
+      DB_USER     = aws_db_instance.platform.username
+      DB_PASSWORD = random_password.rds_master.result
+      DB_NAME     = aws_db_instance.platform.db_name
       INGEST_TOKEN = random_password.ci_ingest_token.result
     }
   }
