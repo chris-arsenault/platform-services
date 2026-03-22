@@ -15,9 +15,10 @@ interface S3Event {
 }
 
 interface ManualEvent {
-  operation: "migrate" | "rollback" | "seed" | "drop";
+  operation: "migrate" | "rollback" | "seed" | "drop" | "noop";
   project: string;
-  target?: string;
+  target?: string;  // rollback: filename to roll back to. noop: filename to mark as applied.
+  comment?: string; // required for noop
 }
 
 type MigrationEvent = S3Event | ManualEvent;
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   id SERIAL PRIMARY KEY,
   filename TEXT NOT NULL UNIQUE,
   checksum TEXT NOT NULL,
+  noop BOOLEAN NOT NULL DEFAULT FALSE,
+  comment TEXT,
   applied_at TIMESTAMPTZ DEFAULT NOW(),
   duration_ms INTEGER
 );
@@ -40,6 +43,7 @@ CREATE TABLE IF NOT EXISTS migration_audit (
   filename TEXT,
   checksum TEXT,
   status TEXT NOT NULL,
+  comment TEXT,
   error_message TEXT,
   duration_ms INTEGER,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -119,13 +123,14 @@ async function audit(
   checksum: string | null,
   status: string,
   errorMessage: string | null,
-  durationMs: number | null
+  durationMs: number | null,
+  comment: string | null = null
 ) {
   try {
     await ops.query(
-      `INSERT INTO migration_audit (project, operation, filename, checksum, status, error_message, duration_ms)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [project, operation, filename, checksum, status, errorMessage, durationMs]
+      `INSERT INTO migration_audit (project, operation, filename, checksum, status, comment, error_message, duration_ms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [project, operation, filename, checksum, status, comment, errorMessage, durationMs]
     );
   } catch (err) {
     log("warn", "Audit write failed (non-fatal)", { error: (err as Error).message });
@@ -373,6 +378,51 @@ async function drop(project: string, config: ProjectConfig) {
   }
 }
 
+async function noop(project: string, config: ProjectConfig, target: string, comment: string) {
+  if (!target) throw new Error("noop requires target (migration filename)");
+  if (!comment) throw new Error("noop requires comment explaining why the migration is being recorded without execution");
+
+  await ensureDatabase(config.db_name);
+  const ops = await getOpsClient();
+  const db = await connectTo(config.db_name);
+
+  try {
+    await acquireLock(ops, project);
+    await db.query(LOCAL_TRACKING);
+
+    // Check if already applied
+    const existing = await db.query("SELECT 1 FROM schema_migrations WHERE filename = $1", [target]);
+    if (existing.rowCount && existing.rowCount > 0) {
+      log("info", "Already recorded", { project, file: target });
+      return { operation: "noop", project, file: target, status: "already_recorded" };
+    }
+
+    // Read the file to get its checksum (file must exist in S3)
+    const files = await listFiles(`migrations/${project}/`);
+    const file = files.find((f) => f.filename === target);
+    if (!file) {
+      throw new Error(`Migration file not found in S3: migrations/${project}/${target}`);
+    }
+
+    const sql = await readFile(file.key);
+    const h = checksum(sql);
+
+    log("info", "Recording noop migration", { project, file: target, comment });
+    await db.query(
+      "INSERT INTO schema_migrations (filename, checksum, noop, comment, duration_ms) VALUES ($1, $2, TRUE, $3, 0)",
+      [target, h, comment]
+    );
+
+    await audit(ops, project, "noop", target, h, "success", null, 0, comment);
+    log("info", "Noop recorded", { project, file: target, comment });
+    return { operation: "noop", project, file: target, comment };
+  } finally {
+    await releaseLock(ops, project);
+    await db.end();
+    await ops.end();
+  }
+}
+
 // =============================================================================
 // Entry point
 // =============================================================================
@@ -398,7 +448,7 @@ export async function handler(event: MigrationEvent) {
     return await migrate(project, config);
   }
 
-  const { operation, project, target } = event as ManualEvent;
+  const { operation, project, target, comment } = event as ManualEvent;
   const config = requireProject(project);
 
   switch (operation) {
@@ -410,6 +460,8 @@ export async function handler(event: MigrationEvent) {
       return await seed(project, config);
     case "drop":
       return await drop(project, config);
+    case "noop":
+      return await noop(project, config, target!, comment!);
     default:
       throw new Error(`Unknown operation: ${operation}`);
   }
