@@ -1,30 +1,28 @@
 import { Client } from "pg";
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
+import { createHash } from "crypto";
 
 const s3 = new S3Client({});
+
+const OPS_DB = "platform_ops";
 
 interface ProjectConfig {
   db_name: string;
 }
 
-// EventBridge S3 event
 interface S3Event {
-  detail: {
-    bucket: { name: string };
-    object: { key: string };
-  };
+  detail: { bucket: { name: string }; object: { key: string } };
 }
 
-// Direct invocation for manual operations
 interface ManualEvent {
   operation: "migrate" | "rollback" | "seed" | "drop";
   project: string;
-  target?: string; // for rollback: filename to roll back to
+  target?: string;
 }
 
 type MigrationEvent = S3Event | ManualEvent;
 
-const TRACKING_TABLE = `
+const LOCAL_TRACKING = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
   id SERIAL PRIMARY KEY,
   filename TEXT NOT NULL UNIQUE,
@@ -34,14 +32,36 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `;
 
+const OPS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS migration_audit (
+  id SERIAL PRIMARY KEY,
+  project TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  filename TEXT,
+  checksum TEXT,
+  status TEXT NOT NULL,
+  error_message TEXT,
+  duration_ms INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_project ON migration_audit (project, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS seed_runs (
+  id SERIAL PRIMARY KEY,
+  project TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  checksum TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_seed_project ON seed_runs (project, created_at DESC);
+`;
+
 function log(level: string, msg: string, data?: Record<string, unknown>) {
   console.log(JSON.stringify({ level, msg, ts: new Date().toISOString(), ...data }));
 }
 
 function getProjectMap(): Record<string, ProjectConfig> {
-  const raw = process.env.PROJECT_MAP;
-  if (!raw) throw new Error("PROJECT_MAP env var not set");
-  return JSON.parse(raw);
+  return JSON.parse(process.env.PROJECT_MAP!);
 }
 
 function getBucket(): string {
@@ -53,7 +73,7 @@ function requireProject(project: string): ProjectConfig {
   const config = map[project];
   if (!config) {
     log("error", "Unknown project", { project, registered: Object.keys(map) });
-    throw new Error(`Project "${project}" is not registered for migrations`);
+    throw new Error(`Project "${project}" is not registered`);
   }
   return config;
 }
@@ -72,16 +92,66 @@ async function connectTo(dbName: string): Promise<Client> {
 }
 
 async function ensureDatabase(dbName: string): Promise<void> {
-  const client = await connectTo("postgres");
+  const pg = await connectTo("postgres");
   try {
-    const result = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
-    if (result.rowCount === 0) {
+    const r = await pg.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
+    if (r.rowCount === 0) {
       log("info", "Creating database", { db: dbName });
-      await client.query(`CREATE DATABASE "${dbName}"`);
+      await pg.query(`CREATE DATABASE "${dbName}"`);
     }
   } finally {
-    await client.end();
+    await pg.end();
   }
+}
+
+async function getOpsClient(): Promise<Client> {
+  await ensureDatabase(OPS_DB);
+  const client = await connectTo(OPS_DB);
+  await client.query(OPS_SCHEMA);
+  return client;
+}
+
+async function audit(
+  ops: Client,
+  project: string,
+  operation: string,
+  filename: string | null,
+  checksum: string | null,
+  status: string,
+  errorMessage: string | null,
+  durationMs: number | null
+) {
+  try {
+    await ops.query(
+      `INSERT INTO migration_audit (project, operation, filename, checksum, status, error_message, duration_ms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [project, operation, filename, checksum, status, errorMessage, durationMs]
+    );
+  } catch (err) {
+    log("warn", "Audit write failed (non-fatal)", { error: (err as Error).message });
+  }
+}
+
+async function acquireLock(client: Client, project: string): Promise<void> {
+  const lockId = Math.abs(hashCode(project));
+  const result = await client.query("SELECT pg_try_advisory_lock($1)", [lockId]);
+  if (!result.rows[0].pg_try_advisory_lock) {
+    throw new Error(`Could not acquire lock for project "${project}" — another migration is running`);
+  }
+  log("debug", "Lock acquired", { project, lockId });
+}
+
+async function releaseLock(client: Client, project: string): Promise<void> {
+  const lockId = Math.abs(hashCode(project));
+  await client.query("SELECT pg_advisory_unlock($1)", [lockId]);
+}
+
+function hashCode(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  }
+  return h;
 }
 
 async function listFiles(prefix: string): Promise<{ key: string; filename: string }[]> {
@@ -94,60 +164,67 @@ async function listFiles(prefix: string): Promise<{ key: string; filename: strin
 }
 
 async function readFile(key: string): Promise<string> {
-  const command = new GetObjectCommand({ Bucket: getBucket(), Key: key });
-  const response = await s3.send(command);
+  const response = await s3.send(new GetObjectCommand({ Bucket: getBucket(), Key: key }));
   return await response.Body!.transformToString();
 }
 
-function hash(content: string): string {
-  const { createHash } = require("crypto");
+function checksum(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
-// --- Operations ---
+// =============================================================================
+// Operations
+// =============================================================================
 
 async function migrate(project: string, config: ProjectConfig) {
   await ensureDatabase(config.db_name);
-  const client = await connectTo(config.db_name);
+  const ops = await getOpsClient();
+  const db = await connectTo(config.db_name);
 
   try {
-    await client.query(TRACKING_TABLE);
+    await acquireLock(ops, project);
+    await db.query(LOCAL_TRACKING);
 
     const files = await listFiles(`migrations/${project}/`);
     log("info", "Migration files", { project, count: files.length, files: files.map((f) => f.filename) });
 
-    const applied = await client.query("SELECT filename, checksum FROM schema_migrations");
+    const applied = await db.query("SELECT filename, checksum FROM schema_migrations");
     const appliedMap = new Map(applied.rows.map((r: { filename: string; checksum: string }) => [r.filename, r.checksum]));
 
     let count = 0;
     for (const file of files) {
       const sql = await readFile(file.key);
-      const h = hash(sql);
+      const h = checksum(sql);
 
       if (appliedMap.has(file.filename)) {
         if (appliedMap.get(file.filename) !== h) {
-          log("error", "Checksum mismatch", { project, file: file.filename, expected: appliedMap.get(file.filename), actual: h });
-          throw new Error(`Checksum mismatch for ${file.filename} — migration was modified after being applied`);
+          const msg = `Checksum mismatch for ${file.filename}`;
+          await audit(ops, project, "migrate", file.filename, h, "error", msg, null);
+          throw new Error(msg);
         }
         continue;
       }
 
-      log("info", "Applying migration", { project, file: file.filename });
+      log("info", "Applying", { project, file: file.filename });
       const start = Date.now();
 
-      await client.query("BEGIN");
+      await db.query("BEGIN");
       try {
-        await client.query(sql);
-        await client.query(
+        await db.query(sql);
+        await db.query(
           "INSERT INTO schema_migrations (filename, checksum, duration_ms) VALUES ($1, $2, $3)",
           [file.filename, h, Date.now() - start]
         );
-        await client.query("COMMIT");
+        await db.query("COMMIT");
         count++;
-        log("info", "Applied", { project, file: file.filename, duration_ms: Date.now() - start });
+        const dur = Date.now() - start;
+        log("info", "Applied", { project, file: file.filename, duration_ms: dur });
+        await audit(ops, project, "migrate", file.filename, h, "success", null, dur);
       } catch (err) {
-        await client.query("ROLLBACK");
-        log("error", "Failed", { project, file: file.filename, error: (err as Error).message });
+        await db.query("ROLLBACK");
+        const msg = (err as Error).message;
+        log("error", "Failed", { project, file: file.filename, error: msg });
+        await audit(ops, project, "migrate", file.filename, h, "error", msg, Date.now() - start);
         throw err;
       }
     }
@@ -155,53 +232,58 @@ async function migrate(project: string, config: ProjectConfig) {
     log("info", "Migrate complete", { project, applied: count, total: files.length });
     return { operation: "migrate", project, applied: count };
   } finally {
-    await client.end();
+    await releaseLock(ops, project);
+    await db.end();
+    await ops.end();
   }
 }
 
 async function rollback(project: string, config: ProjectConfig, target?: string) {
-  const client = await connectTo(config.db_name);
+  const ops = await getOpsClient();
+  const db = await connectTo(config.db_name);
 
   try {
-    const applied = await client.query(
-      "SELECT filename FROM schema_migrations ORDER BY filename DESC"
-    );
+    await acquireLock(ops, project);
 
+    const applied = await db.query("SELECT filename FROM schema_migrations ORDER BY filename DESC");
     if (applied.rowCount === 0) {
       log("info", "Nothing to roll back", { project });
       return { operation: "rollback", project, rolled_back: 0 };
     }
 
-    // Find matching rollback files: migrations/<project>/rollback/001_initial.sql
     const rollbackFiles = await listFiles(`migrations/${project}/rollback/`);
     const rollbackMap = new Map(rollbackFiles.map((f) => [f.filename, f.key]));
 
     let count = 0;
     for (const row of applied.rows) {
       const filename = row.filename;
-
-      // Stop if we've reached the target
       if (target && filename <= target) break;
 
       const rollbackKey = rollbackMap.get(filename);
       if (!rollbackKey) {
-        log("error", "No rollback file", { project, file: filename });
-        throw new Error(`No rollback file for ${filename} at migrations/${project}/rollback/${filename}`);
+        const msg = `No rollback file for ${filename}`;
+        await audit(ops, project, "rollback", filename, null, "error", msg, null);
+        throw new Error(msg);
       }
 
       const sql = await readFile(rollbackKey);
       log("info", "Rolling back", { project, file: filename });
+      const start = Date.now();
 
-      await client.query("BEGIN");
+      await db.query("BEGIN");
       try {
-        await client.query(sql);
-        await client.query("DELETE FROM schema_migrations WHERE filename = $1", [filename]);
-        await client.query("COMMIT");
+        await db.query(sql);
+        await db.query("DELETE FROM schema_migrations WHERE filename = $1", [filename]);
+        await db.query("COMMIT");
         count++;
-        log("info", "Rolled back", { project, file: filename });
+        const dur = Date.now() - start;
+        log("info", "Rolled back", { project, file: filename, duration_ms: dur });
+        await audit(ops, project, "rollback", filename, null, "success", null, dur);
       } catch (err) {
-        await client.query("ROLLBACK");
-        log("error", "Rollback failed", { project, file: filename, error: (err as Error).message });
+        await db.query("ROLLBACK");
+        const msg = (err as Error).message;
+        log("error", "Rollback failed", { project, file: filename, error: msg });
+        await audit(ops, project, "rollback", filename, null, "error", msg, Date.now() - start);
         throw err;
       }
     }
@@ -209,7 +291,9 @@ async function rollback(project: string, config: ProjectConfig, target?: string)
     log("info", "Rollback complete", { project, rolled_back: count });
     return { operation: "rollback", project, rolled_back: count };
   } finally {
-    await client.end();
+    await releaseLock(ops, project);
+    await db.end();
+    await ops.end();
   }
 }
 
@@ -220,48 +304,82 @@ async function seed(project: string, config: ProjectConfig) {
     return { operation: "seed", project, applied: 0 };
   }
 
-  const client = await connectTo(config.db_name);
+  const ops = await getOpsClient();
+  const db = await connectTo(config.db_name);
+
   try {
+    await acquireLock(ops, project);
+
     let count = 0;
     for (const file of seedFiles) {
       const sql = await readFile(file.key);
+      const h = checksum(sql);
+
       log("info", "Seeding", { project, file: file.filename });
       const start = Date.now();
-      await client.query(sql);
-      count++;
-      log("info", "Seeded", { project, file: file.filename, duration_ms: Date.now() - start });
+
+      try {
+        await db.query(sql);
+        count++;
+        const dur = Date.now() - start;
+        log("info", "Seeded", { project, file: file.filename, duration_ms: dur });
+
+        await ops.query(
+          "INSERT INTO seed_runs (project, filename, checksum) VALUES ($1, $2, $3)",
+          [project, file.filename, h]
+        );
+        await audit(ops, project, "seed", file.filename, h, "success", null, dur);
+      } catch (err) {
+        const msg = (err as Error).message;
+        log("error", "Seed failed", { project, file: file.filename, error: msg });
+        await audit(ops, project, "seed", file.filename, h, "error", msg, Date.now() - start);
+        throw err;
+      }
     }
 
     log("info", "Seed complete", { project, applied: count });
     return { operation: "seed", project, applied: count };
   } finally {
-    await client.end();
+    await releaseLock(ops, project);
+    await db.end();
+    await ops.end();
   }
 }
 
 async function drop(project: string, config: ProjectConfig) {
-  log("warn", "Dropping database", { project, db: config.db_name });
-  const client = await connectTo("postgres");
+  const ops = await getOpsClient();
+
   try {
-    // Terminate active connections
-    await client.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [config.db_name]
-    );
-    await client.query(`DROP DATABASE IF EXISTS "${config.db_name}"`);
+    await acquireLock(ops, project);
+    log("warn", "Dropping database", { project, db: config.db_name });
+
+    const pg = await connectTo("postgres");
+    try {
+      await pg.query(
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+        [config.db_name]
+      );
+      await pg.query(`DROP DATABASE IF EXISTS "${config.db_name}"`);
+    } finally {
+      await pg.end();
+    }
+
     log("info", "Database dropped", { project, db: config.db_name });
+    await audit(ops, project, "drop", null, null, "success", null, null);
     return { operation: "drop", project, db: config.db_name };
   } finally {
-    await client.end();
+    await releaseLock(ops, project);
+    await ops.end();
   }
 }
 
-// --- Entry point ---
+// =============================================================================
+// Entry point
+// =============================================================================
 
 export async function handler(event: MigrationEvent) {
   log("info", "Event received", { event: JSON.stringify(event) });
 
-  // EventBridge S3 trigger → always runs migrate
   if ("detail" in event) {
     const key = event.detail.object.key;
     const parts = key.split("/");
@@ -270,7 +388,6 @@ export async function handler(event: MigrationEvent) {
       return { statusCode: 200, body: "ignored" };
     }
 
-    // Only trigger on migration files, not rollback/seed uploads
     const project = parts[1];
     if (parts[2] === "rollback" || parts[2] === "seed") {
       log("info", "Ignoring rollback/seed upload", { key, project });
@@ -278,11 +395,9 @@ export async function handler(event: MigrationEvent) {
     }
 
     const config = requireProject(project);
-    const result = await migrate(project, config);
-    return { statusCode: 200, body: JSON.stringify(result) };
+    return await migrate(project, config);
   }
 
-  // Direct invocation
   const { operation, project, target } = event as ManualEvent;
   const config = requireProject(project);
 
