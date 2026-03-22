@@ -124,13 +124,20 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
             let commit_sha = report.commit_sha.as_deref().unwrap_or("");
             let run_id = report.run_id.as_deref().unwrap_or("");
 
-            if repo.is_empty() || workflow.is_empty() || status.is_empty()
-                || branch.is_empty() || commit_sha.is_empty() || run_id.is_empty()
+            if repo.is_empty()
+                || workflow.is_empty()
+                || status.is_empty()
+                || branch.is_empty()
+                || commit_sha.is_empty()
+                || run_id.is_empty()
             {
-                return json_response(400, JsonResponse {
-                    ok: None,
-                    error: Some("Missing required fields".into()),
-                });
+                return json_response(
+                    400,
+                    JsonResponse {
+                        ok: None,
+                        error: Some("Missing required fields".into()),
+                    },
+                );
             }
 
             // Token auth
@@ -142,10 +149,13 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
                     .unwrap_or("");
                 let provided = auth.strip_prefix("Bearer ").unwrap_or("");
                 if provided != token {
-                    return json_response(401, JsonResponse {
-                        ok: None,
-                        error: Some("Unauthorized".into()),
-                    });
+                    return json_response(
+                        401,
+                        JsonResponse {
+                            ok: None,
+                            error: Some("Unauthorized".into()),
+                        },
+                    );
                 }
             }
 
@@ -166,64 +176,90 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
                 ],
             ).await?;
 
-            json_response(200, JsonResponse { ok: Some(true), error: None })
+            json_response(
+                200,
+                JsonResponse {
+                    ok: Some(true),
+                    error: None,
+                },
+            )
         }
 
         ("GET", "/api/ci/builds") => {
-            let rows = db.query(
-                "SELECT repo, workflow, status, branch, commit_sha, run_id, run_url,
+            let rows = db
+                .query(
+                    "SELECT repo, workflow, status, branch, commit_sha, run_id, run_url,
                         duration_seconds, lint_passed, test_passed, created_at
                  FROM ci_builds ORDER BY created_at DESC LIMIT 100",
-                &[],
-            ).await?;
+                    &[],
+                )
+                .await?;
 
-            let builds: Vec<serde_json::Value> = rows.iter().map(|r| {
-                serde_json::json!({
-                    "repo": r.get::<_, String>(0),
-                    "workflow": r.get::<_, String>(1),
-                    "status": r.get::<_, String>(2),
-                    "branch": r.get::<_, String>(3),
-                    "commit_sha": r.get::<_, String>(4),
-                    "run_id": r.get::<_, String>(5),
-                    "run_url": r.get::<_, Option<String>>(6),
-                    "duration_seconds": r.get::<_, Option<i32>>(7),
-                    "lint_passed": r.get::<_, Option<bool>>(8),
-                    "test_passed": r.get::<_, Option<bool>>(9),
-                    "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10).to_rfc3339(),
+            let builds: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "repo": r.get::<_, String>(0),
+                        "workflow": r.get::<_, String>(1),
+                        "status": r.get::<_, String>(2),
+                        "branch": r.get::<_, String>(3),
+                        "commit_sha": r.get::<_, String>(4),
+                        "run_id": r.get::<_, String>(5),
+                        "run_url": r.get::<_, Option<String>>(6),
+                        "duration_seconds": r.get::<_, Option<i32>>(7),
+                        "lint_passed": r.get::<_, Option<bool>>(8),
+                        "test_passed": r.get::<_, Option<bool>>(9),
+                        "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10).to_rfc3339(),
+                    })
                 })
-            }).collect();
+                .collect();
 
             json_response(200, builds)
         }
 
         ("GET", "/api/ci/summary") => {
-            let rows = db.query(
-                "SELECT DISTINCT ON (repo, workflow)
+            let rows = db
+                .query(
+                    "SELECT DISTINCT ON (repo, workflow)
                         repo, workflow, status, branch, commit_sha, run_url, created_at
                  FROM ci_builds ORDER BY repo, workflow, created_at DESC",
-                &[],
-            ).await?;
+                    &[],
+                )
+                .await?;
 
-            let summary: Vec<serde_json::Value> = rows.iter().map(|r| {
-                serde_json::json!({
-                    "repo": r.get::<_, String>(0),
-                    "workflow": r.get::<_, String>(1),
-                    "status": r.get::<_, String>(2),
-                    "branch": r.get::<_, String>(3),
-                    "commit_sha": r.get::<_, String>(4),
-                    "run_url": r.get::<_, Option<String>>(5),
-                    "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
+            let summary: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "repo": r.get::<_, String>(0),
+                        "workflow": r.get::<_, String>(1),
+                        "status": r.get::<_, String>(2),
+                        "branch": r.get::<_, String>(3),
+                        "commit_sha": r.get::<_, String>(4),
+                        "run_url": r.get::<_, Option<String>>(5),
+                        "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
+                    })
                 })
-            }).collect();
+                .collect();
 
             json_response(200, summary)
         }
 
-        ("GET", "/api/ci/health") => {
-            json_response(200, JsonResponse { ok: Some(true), error: None })
-        }
+        ("GET", "/api/ci/health") => json_response(
+            200,
+            JsonResponse {
+                ok: Some(true),
+                error: None,
+            },
+        ),
 
-        _ => json_response(404, JsonResponse { ok: None, error: Some("Not found".into()) }),
+        _ => json_response(
+            404,
+            JsonResponse {
+                ok: None,
+                error: Some("Not found".into()),
+            },
+        ),
     }
 }
 
@@ -235,7 +271,9 @@ async fn main() -> Result<(), Error> {
 
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?),
+        )
         .without_time()
         .init();
 

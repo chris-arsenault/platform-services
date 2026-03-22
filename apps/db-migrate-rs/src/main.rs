@@ -77,7 +77,7 @@ struct S3Object {
     key: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 struct Response {
     operation: String,
     project: String,
@@ -162,15 +162,27 @@ async fn connect_to(db_name: &str) -> Result<Client, Error> {
 /// Connect using the project's app role credentials from SSM
 async fn connect_as_app(project: &str, db_name: &str, ssm: &SsmClient) -> Result<Client, Error> {
     let prefix = format!("/platform/db/{project}");
-    let user = ssm.get_parameter()
+    let user = ssm
+        .get_parameter()
         .name(format!("{prefix}/username"))
-        .send().await?
-        .parameter().ok_or("SSM param not found")?.value().ok_or("empty value")?.to_string();
-    let password = ssm.get_parameter()
+        .send()
+        .await?
+        .parameter()
+        .ok_or("SSM param not found")?
+        .value()
+        .ok_or("empty value")?
+        .to_string();
+    let password = ssm
+        .get_parameter()
         .name(format!("{prefix}/password"))
         .with_decryption(true)
-        .send().await?
-        .parameter().ok_or("SSM param not found")?.value().ok_or("empty value")?.to_string();
+        .send()
+        .await?
+        .parameter()
+        .ok_or("SSM param not found")?
+        .value()
+        .ok_or("empty value")?
+        .to_string();
     connect_with(db_name, &user, &password).await
 }
 
@@ -238,13 +250,18 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
             .send()
             .await?;
 
-        info!(project, role = role_name, "App role created and credentials published to SSM");
+        info!(
+            project,
+            role = role_name,
+            "App role created and credentials published to SSM"
+        );
     }
 
     // Always ensure grants are in place (idempotent — covers fresh databases after drop)
     pg.batch_execute(&format!(
         "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\""
-    )).await?;
+    ))
+    .await?;
 
     let db = connect_to(db_name).await?;
     db.batch_execute(&format!(
@@ -253,7 +270,8 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";
          GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{role_name}\";
          GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{role_name}\";"
-    )).await?;
+    ))
+    .await?;
 
     Ok(())
 }
@@ -278,22 +296,23 @@ async fn get_ops_client() -> Result<Client, Error> {
     Ok(client)
 }
 
-async fn audit(
-    ops: &Client,
-    project: &str,
-    operation: &str,
-    filename: Option<&str>,
-    checksum: Option<&str>,
-    status: &str,
-    error_message: Option<&str>,
+struct AuditEntry<'a> {
+    project: &'a str,
+    operation: &'a str,
+    filename: Option<&'a str>,
+    checksum: Option<&'a str>,
+    status: &'a str,
+    error_message: Option<&'a str>,
     duration_ms: Option<i32>,
-    comment: Option<&str>,
-) {
+    comment: Option<&'a str>,
+}
+
+async fn audit(ops: &Client, entry: AuditEntry<'_>) {
     if let Err(e) = ops
         .execute(
             "INSERT INTO migration_audit (project, operation, filename, checksum, status, comment, error_message, duration_ms)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            &[&project, &operation, &filename, &checksum, &status, &comment, &error_message, &duration_ms],
+            &[&entry.project, &entry.operation, &entry.filename, &entry.checksum, &entry.status, &entry.comment, &entry.error_message, &entry.duration_ms],
         )
         .await
     {
@@ -326,7 +345,11 @@ async fn release_lock(client: &Client, project: &str) -> Result<(), Error> {
     Ok(())
 }
 
-async fn list_files(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<MigrationFile>, Error> {
+async fn list_files(
+    s3: &S3Client,
+    bucket: &str,
+    prefix: &str,
+) -> Result<Vec<MigrationFile>, Error> {
     let resp = s3
         .list_objects_v2()
         .bucket(bucket)
@@ -374,7 +397,12 @@ fn bucket() -> String {
 // Operations
 // =============================================================================
 
-async fn migrate(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig) -> Result<Response, Error> {
+async fn migrate(
+    s3: &S3Client,
+    ssm: &SsmClient,
+    project: &str,
+    config: &ProjectConfig,
+) -> Result<Response, Error> {
     ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
     let db = connect_as_app(project, &config.db_name, ssm).await?;
@@ -403,7 +431,16 @@ async fn migrate(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Project
             if let Some(existing) = applied.get(&file.filename) {
                 if existing != &h {
                     let msg = format!("Checksum mismatch for {}", file.filename);
-                    audit(&ops, project, "migrate", Some(&file.filename), Some(&h), "error", Some(&msg), None, None).await;
+                    audit(&ops, AuditEntry {
+                        project,
+                        operation: "migrate",
+                        filename: Some(&file.filename),
+                        checksum: Some(&h),
+                        status: "error",
+                        error_message: Some(&msg),
+                        duration_ms: None,
+                        comment: None,
+                    }).await;
                     return Err(msg.into());
                 }
                 continue;
@@ -423,13 +460,31 @@ async fn migrate(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Project
                     db.batch_execute("COMMIT").await?;
                     count += 1;
                     info!(project, file = file.filename, duration_ms = dur, "Applied");
-                    audit(&ops, project, "migrate", Some(&file.filename), Some(&h), "success", None, Some(dur), None).await;
+                    audit(&ops, AuditEntry {
+                        project,
+                        operation: "migrate",
+                        filename: Some(&file.filename),
+                        checksum: Some(&h),
+                        status: "success",
+                        error_message: None,
+                        duration_ms: Some(dur),
+                        comment: None,
+                    }).await;
                 }
                 Err(e) => {
                     db.batch_execute("ROLLBACK").await.ok();
                     let msg = e.to_string();
                     error!(project, file = file.filename, error = msg, "Failed");
-                    audit(&ops, project, "migrate", Some(&file.filename), Some(&h), "error", Some(&msg), None, None).await;
+                    audit(&ops, AuditEntry {
+                        project,
+                        operation: "migrate",
+                        filename: Some(&file.filename),
+                        checksum: Some(&h),
+                        status: "error",
+                        error_message: Some(&msg),
+                        duration_ms: None,
+                        comment: None,
+                    }).await;
                     return Err(e.into());
                 }
             }
@@ -449,7 +504,13 @@ async fn migrate(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Project
     result
 }
 
-async fn rollback(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig, target: Option<&str>) -> Result<Response, Error> {
+async fn rollback(
+    s3: &S3Client,
+    ssm: &SsmClient,
+    project: &str,
+    config: &ProjectConfig,
+    target: Option<&str>,
+) -> Result<Response, Error> {
     let ops = get_ops_client().await?;
     let db = connect_as_app(project, &config.db_name, ssm).await?;
     let bucket = bucket();
@@ -457,7 +518,10 @@ async fn rollback(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Projec
     acquire_lock(&ops, project).await?;
     let result = async {
         let applied_rows = db
-            .query("SELECT filename FROM schema_migrations ORDER BY filename DESC", &[])
+            .query(
+                "SELECT filename FROM schema_migrations ORDER BY filename DESC",
+                &[],
+            )
             .await?;
         if applied_rows.is_empty() {
             info!(project, "Nothing to roll back");
@@ -469,7 +533,8 @@ async fn rollback(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Projec
             });
         }
 
-        let rollback_files = list_files(s3, &bucket, &format!("migrations/{project}/rollback/")).await?;
+        let rollback_files =
+            list_files(s3, &bucket, &format!("migrations/{project}/rollback/")).await?;
         let rollback_map: HashMap<String, String> = rollback_files
             .into_iter()
             .map(|f| (f.filename, f.key))
@@ -484,9 +549,9 @@ async fn rollback(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Projec
                 }
             }
 
-            let rollback_key = rollback_map.get(&filename).ok_or_else(|| {
-                format!("No rollback file for {filename}")
-            })?;
+            let rollback_key = rollback_map
+                .get(&filename)
+                .ok_or_else(|| format!("No rollback file for {filename}"))?;
 
             let sql = read_file(s3, &bucket, rollback_key).await?;
             info!(project, file = filename, "Rolling back");
@@ -495,17 +560,47 @@ async fn rollback(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Projec
             db.batch_execute("BEGIN").await?;
             match db.batch_execute(&sql).await {
                 Ok(()) => {
-                    db.execute("DELETE FROM schema_migrations WHERE filename = $1", &[&filename]).await?;
+                    db.execute(
+                        "DELETE FROM schema_migrations WHERE filename = $1",
+                        &[&filename],
+                    )
+                    .await?;
                     db.batch_execute("COMMIT").await?;
                     count += 1;
                     let dur = start.elapsed().as_millis() as i32;
                     info!(project, file = filename, duration_ms = dur, "Rolled back");
-                    audit(&ops, project, "rollback", Some(&filename), None, "success", None, Some(dur), None).await;
+                    audit(
+                        &ops,
+                        AuditEntry {
+                            project,
+                            operation: "rollback",
+                            filename: Some(&filename),
+                            checksum: None,
+                            status: "success",
+                            error_message: None,
+                            duration_ms: Some(dur),
+                            comment: None,
+                        },
+                    )
+                    .await;
                 }
                 Err(e) => {
                     db.batch_execute("ROLLBACK").await.ok();
                     let msg = e.to_string();
-                    audit(&ops, project, "rollback", Some(&filename), None, "error", Some(&msg), None, None).await;
+                    audit(
+                        &ops,
+                        AuditEntry {
+                            project,
+                            operation: "rollback",
+                            filename: Some(&filename),
+                            checksum: None,
+                            status: "error",
+                            error_message: Some(&msg),
+                            duration_ms: None,
+                            comment: None,
+                        },
+                    )
+                    .await;
                     return Err(e.into());
                 }
             }
@@ -524,7 +619,12 @@ async fn rollback(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Projec
     result
 }
 
-async fn seed(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig) -> Result<Response, Error> {
+async fn seed(
+    s3: &S3Client,
+    ssm: &SsmClient,
+    project: &str,
+    config: &ProjectConfig,
+) -> Result<Response, Error> {
     let bucket = bucket();
     let seed_files = list_files(s3, &bucket, &format!("migrations/{project}/seed/")).await?;
     if seed_files.is_empty() {
@@ -541,40 +641,67 @@ async fn seed(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectCon
     let db = connect_as_app(project, &config.db_name, ssm).await?;
 
     acquire_lock(&ops, project).await?;
-    let result = async {
-        let mut count = 0i32;
-        for file in &seed_files {
-            let sql = read_file(s3, &bucket, &file.key).await?;
-            let h = checksum(&sql);
-            info!(project, file = file.filename, "Seeding");
-            let start = std::time::Instant::now();
+    let result =
+        async {
+            let mut count = 0i32;
+            for file in &seed_files {
+                let sql = read_file(s3, &bucket, &file.key).await?;
+                let h = checksum(&sql);
+                info!(project, file = file.filename, "Seeding");
+                let start = std::time::Instant::now();
 
-            match db.batch_execute(&sql).await {
-                Ok(()) => {
-                    count += 1;
-                    let dur = start.elapsed().as_millis() as i32;
-                    info!(project, file = file.filename, duration_ms = dur, "Seeded");
-                    ops.execute(
+                match db.batch_execute(&sql).await {
+                    Ok(()) => {
+                        count += 1;
+                        let dur = start.elapsed().as_millis() as i32;
+                        info!(project, file = file.filename, duration_ms = dur, "Seeded");
+                        ops.execute(
                         "INSERT INTO seed_runs (project, filename, checksum) VALUES ($1, $2, $3)",
                         &[&project, &file.filename, &h],
                     ).await.ok();
-                    audit(&ops, project, "seed", Some(&file.filename), Some(&h), "success", None, Some(dur), None).await;
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    audit(&ops, project, "seed", Some(&file.filename), Some(&h), "error", Some(&msg), None, None).await;
-                    return Err(e.into());
+                        audit(
+                            &ops,
+                            AuditEntry {
+                                project,
+                                operation: "seed",
+                                filename: Some(&file.filename),
+                                checksum: Some(&h),
+                                status: "success",
+                                error_message: None,
+                                duration_ms: Some(dur),
+                                comment: None,
+                            },
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        audit(
+                            &ops,
+                            AuditEntry {
+                                project,
+                                operation: "seed",
+                                filename: Some(&file.filename),
+                                checksum: Some(&h),
+                                status: "error",
+                                error_message: Some(&msg),
+                                duration_ms: None,
+                                comment: None,
+                            },
+                        )
+                        .await;
+                        return Err(e.into());
+                    }
                 }
             }
+            Ok(Response {
+                operation: "seed".into(),
+                project: project.into(),
+                applied: Some(count),
+                ..Default::default()
+            })
         }
-        Ok(Response {
-            operation: "seed".into(),
-            project: project.into(),
-            applied: Some(count),
-            ..Default::default()
-        })
-    }
-    .await;
+        .await;
 
     release_lock(&ops, project).await.ok();
     result
@@ -593,7 +720,16 @@ async fn drop_db(project: &str, config: &ProjectConfig) -> Result<Response, Erro
         ).await?;
         pg.batch_execute(&format!("DROP DATABASE IF EXISTS \"{}\"", config.db_name)).await?;
         info!(project, db = config.db_name, "Database dropped");
-        audit(&ops, project, "drop", None, None, "success", None, None, None).await;
+        audit(&ops, AuditEntry {
+                        project,
+                        operation: "drop",
+                        filename: None,
+                        checksum: None,
+                        status: "success",
+                        error_message: None,
+                        duration_ms: None,
+                        comment: None,
+                    }).await;
         Ok(Response {
             operation: "drop".into(),
             project: project.into(),
@@ -607,7 +743,14 @@ async fn drop_db(project: &str, config: &ProjectConfig) -> Result<Response, Erro
     result
 }
 
-async fn noop(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig, target: &str, comment: &str) -> Result<Response, Error> {
+async fn noop(
+    s3: &S3Client,
+    ssm: &SsmClient,
+    project: &str,
+    config: &ProjectConfig,
+    target: &str,
+    comment: &str,
+) -> Result<Response, Error> {
     ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
     let db = connect_as_app(project, &config.db_name, ssm).await?;
@@ -641,7 +784,16 @@ async fn noop(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectCon
             "INSERT INTO schema_migrations (filename, checksum, noop, comment, duration_ms) VALUES ($1, $2, TRUE, $3, 0)",
             &[&target, &h, &comment],
         ).await?;
-        audit(&ops, project, "noop", Some(target), Some(&h), "success", None, Some(0), Some(comment)).await;
+        audit(&ops, AuditEntry {
+                        project,
+                        operation: "noop",
+                        filename: Some(target),
+                        checksum: Some(&h),
+                        status: "success",
+                        error_message: None,
+                        duration_ms: Some(0),
+                        comment: Some(comment),
+                    }).await;
 
         Ok(Response {
             operation: "noop".into(),
@@ -657,7 +809,14 @@ async fn noop(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectCon
     result
 }
 
-async fn restore(s3: &S3Client, ssm: &SsmClient, project: &str, config: &ProjectConfig, target: &str, comment: &str) -> Result<Response, Error> {
+async fn restore(
+    s3: &S3Client,
+    ssm: &SsmClient,
+    project: &str,
+    config: &ProjectConfig,
+    target: &str,
+    comment: &str,
+) -> Result<Response, Error> {
     ensure_database(project, &config.db_name, ssm).await?;
     let ops = get_ops_client().await?;
     let bucket = bucket();
@@ -728,7 +887,16 @@ async fn restore(s3: &S3Client, ssm: &SsmClient, project: &str, config: &Project
             info!(project, file = file.filename, "Baselined");
         }
 
-        audit(&ops, project, "restore", Some(target), None, "success", None, Some(dur as i32), Some(comment)).await;
+        audit(&ops, AuditEntry {
+                        project,
+                        operation: "restore",
+                        filename: Some(target),
+                        checksum: None,
+                        status: "success",
+                        error_message: None,
+                        duration_ms: Some(dur as i32),
+                        comment: Some(comment),
+                    }).await;
         info!(project, key = target, duration_ms = dur, baselined, "Restore complete");
 
         Ok(Response {
@@ -806,24 +974,6 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
     Ok(serde_json::to_value(response)?)
 }
 
-impl Default for Response {
-    fn default() -> Self {
-        Self {
-            operation: String::new(),
-            project: String::new(),
-            applied: None,
-            rolled_back: None,
-            baselined: None,
-            duration_ms: None,
-            key: None,
-            db: None,
-            file: None,
-            comment: None,
-            status: None,
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     rustls::crypto::ring::default_provider()
@@ -832,7 +982,9 @@ async fn main() -> Result<(), Error> {
 
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?),
+        )
         .without_time()
         .init();
 
