@@ -17,7 +17,7 @@ AUTH_DIR="${ROOT_DIR}/apps/auth-trigger"
 (cd "${AUTH_DIR}" && npm ci && npm run build)
 
 echo "Initializing Terraform backend..."
-tf init \
+tf init -reconfigure \
   -backend-config="bucket=${STATE_BUCKET}" \
   -backend-config="region=${STATE_REGION}" \
   -backend-config="use_lockfile=${USE_LOCKFILE}"
