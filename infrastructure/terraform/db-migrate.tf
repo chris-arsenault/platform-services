@@ -108,8 +108,8 @@ resource "aws_lambda_function" "db_migrate" {
   filename         = data.archive_file.db_migrate.output_path
   source_code_hash = data.archive_file.db_migrate.output_base64sha256
 
-  timeout     = 120
-  memory_size = 256
+  timeout     = 900
+  memory_size = 512
 
   vpc_config {
     subnet_ids         = split(",", nonsensitive(data.aws_ssm_parameter.private_subnet_ids.value))
