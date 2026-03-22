@@ -314,12 +314,14 @@ async fn list_files(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<Mig
         .prefix(prefix)
         .send()
         .await?;
+    let prefix_depth = prefix.matches('/').count();
     let mut files: Vec<MigrationFile> = resp
         .contents()
         .iter()
         .filter_map(|obj| {
             let key = obj.key()?;
-            if key.ends_with(".sql") {
+            // Only include files directly under the prefix, not in subdirectories
+            if key.ends_with(".sql") && key.matches('/').count() == prefix_depth {
                 Some(MigrationFile {
                     key: key.to_string(),
                     filename: key.rsplit('/').next().unwrap_or(key).to_string(),
