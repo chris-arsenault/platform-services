@@ -35,6 +35,19 @@ resource "aws_ssm_parameter" "cognito_client_ids" {
   value = module.cognito.client_ids[each.key]
 }
 
+# ALB client (for authenticate-cognito action on dashboard routes)
+resource "aws_ssm_parameter" "alb_cognito_client_id" {
+  name  = "${local.ssm_prefix}/cognito/alb-client-id"
+  type  = "String"
+  value = aws_cognito_user_pool_client.alb.id
+}
+
+resource "aws_ssm_parameter" "alb_cognito_client_secret" {
+  name  = "${local.ssm_prefix}/cognito/alb-client-secret"
+  type  = "SecureString"
+  value = aws_cognito_user_pool_client.alb.client_secret
+}
+
 # SonarQube client (separate because it has a secret)
 resource "aws_ssm_parameter" "sonarqube_cognito_client_id" {
   name  = "${local.ssm_prefix}/sonarqube/cognito-client-id"

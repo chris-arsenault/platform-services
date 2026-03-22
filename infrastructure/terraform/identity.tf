@@ -32,6 +32,29 @@ resource "aws_dynamodb_table" "user_access" {
 # SonarQube Cognito Client (OAuth2 code flow for SonarQube OIDC plugin)
 # =============================================================================
 
+# =============================================================================
+# ALB Cognito Client (for authenticate-cognito action on dashboard routes)
+# =============================================================================
+
+resource "aws_cognito_user_pool_client" "alb" {
+  name         = "platform-alb"
+  user_pool_id = module.cognito.user_pool_id
+
+  generate_secret                      = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  allowed_oauth_flows_user_pool_client = true
+  supported_identity_providers         = ["COGNITO"]
+
+  callback_urls = [
+    "https://dashboards.ahara.io/oauth2/idpresponse"
+  ]
+
+  logout_urls = [
+    "https://dashboards.ahara.io/logout"
+  ]
+}
+
 resource "aws_cognito_user_pool_client" "sonarqube" {
   name         = "sonarqube"
   user_pool_id = module.cognito.user_pool_id
