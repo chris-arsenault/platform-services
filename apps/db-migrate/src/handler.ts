@@ -427,20 +427,47 @@ async function restore(project: string, config: ProjectConfig, target: string, c
 
   await ensureDatabase(config.db_name);
   const ops = await getOpsClient();
-  const db = await connectTo(config.db_name);
+  let db = await connectTo(config.db_name);
 
   try {
     await acquireLock(ops, project);
-    await db.query(LOCAL_TRACKING);
+
+    // Drop and recreate the database for a clean restore
+    log("info", "Dropping existing database for clean restore", { project, db: config.db_name });
+    await db.end();
+    const pg = await connectTo("postgres");
+    try {
+      await pg.query(
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+        [config.db_name]
+      );
+      await pg.query(`DROP DATABASE IF EXISTS "${config.db_name}"`);
+      await pg.query(`CREATE DATABASE "${config.db_name}"`);
+    } finally {
+      await pg.end();
+    }
+    db = await connectTo(config.db_name);
 
     // Restore the dump (strip psql metacommands that pg client can't execute)
     log("info", "Restoring from S3", { project, key: target });
     const raw = await readFile(target);
-    const sql = raw.split("\n").filter((line) => !line.startsWith("\\")).join("\n");
+    const sql = raw
+      .split("\n")
+      .filter((line) => !line.startsWith("\\"))
+      .map((line) =>
+        line.includes("set_config('search_path'")
+          ? "SELECT pg_catalog.set_config('search_path', 'public', false);"
+          : line
+      )
+      .join("\n");
     const start = Date.now();
     await db.query(sql);
     const dur = Date.now() - start;
     log("info", "SQL restored", { project, key: target, duration_ms: dur });
+
+    // Restore search_path (pg_dump clears it) then create tracking table
+    await db.query("SET search_path TO public");
+    await db.query(LOCAL_TRACKING);
 
     // Record all existing migration files as noops so future db-migrate
     // doesn't try to re-apply them against the restored schema
