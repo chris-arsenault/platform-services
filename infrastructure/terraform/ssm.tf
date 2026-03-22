@@ -65,3 +65,41 @@ resource "aws_ssm_parameter" "sonarqube_ci_token" {
     ignore_changes = [value]
   }
 }
+
+# --- Shared RDS ---
+
+resource "aws_ssm_parameter" "rds_endpoint" {
+  name  = "${local.ssm_prefix}/rds/endpoint"
+  type  = "String"
+  value = aws_db_instance.platform.endpoint
+}
+
+resource "aws_ssm_parameter" "rds_address" {
+  name  = "${local.ssm_prefix}/rds/address"
+  type  = "String"
+  value = aws_db_instance.platform.address
+}
+
+resource "aws_ssm_parameter" "rds_port" {
+  name  = "${local.ssm_prefix}/rds/port"
+  type  = "String"
+  value = tostring(aws_db_instance.platform.port)
+}
+
+resource "aws_ssm_parameter" "rds_master_username" {
+  name  = "${local.ssm_prefix}/rds/master-username"
+  type  = "String"
+  value = aws_db_instance.platform.username
+}
+
+resource "aws_ssm_parameter" "rds_master_password" {
+  name  = "${local.ssm_prefix}/rds/master-password"
+  type  = "SecureString"
+  value = random_password.rds_master.result
+}
+
+resource "aws_ssm_parameter" "rds_security_group_id" {
+  name  = "${local.ssm_prefix}/rds/security-group-id"
+  type  = "String"
+  value = aws_security_group.rds.id
+}
