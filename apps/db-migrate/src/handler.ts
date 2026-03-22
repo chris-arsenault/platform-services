@@ -15,10 +15,10 @@ interface S3Event {
 }
 
 interface ManualEvent {
-  operation: "migrate" | "rollback" | "seed" | "drop" | "noop";
+  operation: "migrate" | "rollback" | "seed" | "drop" | "noop" | "restore";
   project: string;
-  target?: string;  // rollback: filename to roll back to. noop: filename to mark as applied.
-  comment?: string; // required for noop
+  target?: string;  // rollback: filename to roll back to. noop: migration filename. restore: S3 key.
+  comment?: string; // required for noop and restore
 }
 
 type MigrationEvent = S3Event | ManualEvent;
@@ -423,6 +423,59 @@ async function noop(project: string, config: ProjectConfig, target: string, comm
   }
 }
 
+async function restore(project: string, config: ProjectConfig, target: string, comment: string) {
+  if (!target) throw new Error("restore requires target (S3 key of the SQL dump)");
+  if (!comment) throw new Error("restore requires comment explaining the restore context");
+
+  await ensureDatabase(config.db_name);
+  const ops = await getOpsClient();
+  const db = await connectTo(config.db_name);
+
+  try {
+    await acquireLock(ops, project);
+    await db.query(LOCAL_TRACKING);
+
+    // Restore the dump
+    log("info", "Restoring from S3", { project, key: target });
+    const sql = await readFile(target);
+    const start = Date.now();
+    await db.query(sql);
+    const dur = Date.now() - start;
+    log("info", "SQL restored", { project, key: target, duration_ms: dur });
+
+    // Record all existing migration files as noops so future db-migrate
+    // doesn't try to re-apply them against the restored schema
+    const migrationFiles = await listFiles(`migrations/${project}/`);
+    let baselined = 0;
+    for (const file of migrationFiles) {
+      const existing = await db.query("SELECT 1 FROM schema_migrations WHERE filename = $1", [file.filename]);
+      if (existing.rowCount && existing.rowCount > 0) continue;
+
+      const content = await readFile(file.key);
+      const h = checksum(content);
+      await db.query(
+        "INSERT INTO schema_migrations (filename, checksum, noop, comment, duration_ms) VALUES ($1, $2, TRUE, $3, 0)",
+        [file.filename, h, comment]
+      );
+      baselined++;
+      log("info", "Baselined migration", { project, file: file.filename });
+    }
+
+    await audit(ops, project, "restore", target, null, "success", null, dur, comment);
+    log("info", "Restore complete", { project, key: target, duration_ms: dur, baselined });
+    return { operation: "restore", project, key: target, duration_ms: dur, baselined };
+  } catch (err) {
+    const msg = (err as Error).message;
+    log("error", "Restore failed", { project, key: target, error: msg });
+    await audit(ops, project, "restore", target, null, "error", msg, null, comment);
+    throw err;
+  } finally {
+    await releaseLock(ops, project);
+    await db.end();
+    await ops.end();
+  }
+}
+
 // =============================================================================
 // Entry point
 // =============================================================================
@@ -462,6 +515,8 @@ export async function handler(event: MigrationEvent) {
       return await drop(project, config);
     case "noop":
       return await noop(project, config, target!, comment!);
+    case "restore":
+      return await restore(project, config, target!, comment!);
     default:
       throw new Error(`Unknown operation: ${operation}`);
   }
