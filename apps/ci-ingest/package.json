@@ -1,0 +1,15 @@
+{
+  "name": "ci-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/handler.ts --bundle --platform=node --target=node24 --outdir=dist --sourcemap --external:pg-native"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0",
+    "esbuild": "^0.24.0"
+  }
+}

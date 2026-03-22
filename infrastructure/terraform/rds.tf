@@ -14,6 +14,18 @@ data "aws_ssm_parameter" "alb_security_group_id" {
   name = "/platform/network/alb-security-group-id"
 }
 
+data "aws_ssm_parameter" "alb_listener_arn" {
+  name = "/platform/network/alb-listener-arn"
+}
+
+data "aws_ssm_parameter" "alb_dns_name" {
+  name = "/platform/network/alb-dns-name"
+}
+
+data "aws_ssm_parameter" "alb_zone_id" {
+  name = "/platform/network/alb-zone-id"
+}
+
 resource "aws_db_subnet_group" "platform" {
   name       = "platform-db"
   subnet_ids = split(",", nonsensitive(data.aws_ssm_parameter.private_subnet_ids.value))
