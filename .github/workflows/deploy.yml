@@ -23,6 +23,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: hashicorp/setup-terraform@v4
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/target
+          key: rust-lint-${{ hashFiles('apps/Cargo.lock') }}
+          restore-keys: rust-lint-
       - name: Rust fmt
         working-directory: apps
         run: cargo fmt --check
@@ -48,9 +58,18 @@ jobs:
         with:
           node-version: "24"
       - uses: dtolnay/rust-toolchain@stable
-      - uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall -y cargo-lambda
       - uses: hashicorp/setup-terraform@v4
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/target
+          key: rust-deploy-${{ hashFiles('apps/Cargo.lock') }}
+          restore-keys: rust-deploy-
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
       - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.OIDC_ROLE }}
