@@ -1,5 +1,11 @@
 # =============================================================================
 # Cognito User Pool (shared across all platform apps)
+#
+# DEPENDENCY: The Cognito custom domain (auth.ahara.io) requires that the
+# apex domain (ahara.io) has an A record in Route53. This is an undocumented
+# AWS prerequisite. The record is currently managed by the websites project
+# (ahara.io SPA). If that site is ever removed, a placeholder A record must
+# be created to keep the Cognito domain functional.
 # =============================================================================
 
 module "cognito" {
