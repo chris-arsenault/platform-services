@@ -60,11 +60,11 @@ resource "aws_lambda_function" "ci_ingest" {
 
   environment {
     variables = {
-      DB_HOST     = aws_db_instance.platform.address
-      DB_PORT     = tostring(aws_db_instance.platform.port)
-      DB_USER     = aws_db_instance.platform.username
-      DB_PASSWORD = random_password.rds_master.result
-      DB_NAME     = aws_db_instance.platform.db_name
+      DB_HOST      = aws_db_instance.platform.address
+      DB_PORT      = tostring(aws_db_instance.platform.port)
+      DB_USER      = aws_db_instance.platform.username
+      DB_PASSWORD  = random_password.rds_master.result
+      DB_NAME      = aws_db_instance.platform.db_name
       INGEST_TOKEN = random_password.ci_ingest_token.result
     }
   }

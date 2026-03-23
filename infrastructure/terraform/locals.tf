@@ -1,5 +1,5 @@
 locals {
-  auth_domain    = "auth.${var.domain_name}"
+  auth_domain      = "auth.${var.domain_name}"
   sonarqube_domain = "sonar.${var.domain_name}"
 
   user_access_table_name = "websites-user-access"
