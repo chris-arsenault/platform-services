@@ -81,8 +81,8 @@ resource "aws_iam_role_policy" "db_migrate_s3_ssm" {
         Resource = [aws_s3_bucket.migrations.arn, "${aws_s3_bucket.migrations.arn}/*"]
       },
       {
-        Effect = "Allow"
-        Action = ["ssm:PutParameter", "ssm:GetParameter"]
+        Effect   = "Allow"
+        Action   = ["ssm:PutParameter", "ssm:GetParameter"]
         Resource = ["arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/platform/db/*"]
       }
     ]
