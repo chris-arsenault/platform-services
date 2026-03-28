@@ -14,9 +14,10 @@ variable "migration_projects" {
   description = "Registered projects and their database names"
   type        = map(object({ db_name = string }))
   default = {
-    platform = { db_name = "platform" }
-    svap     = { db_name = "svap" }
-    dosekit  = { db_name = "dosekit" }
+    platform  = { db_name = "platform" }
+    svap      = { db_name = "svap" }
+    dosekit   = { db_name = "dosekit" }
+    tastebase = { db_name = "tastebase" }
   }
 }
 
