@@ -7,23 +7,24 @@ on:
     branches: [main]
   workflow_dispatch:
 
-concurrency:
-  group: platform-services-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  lint-and-test:
+  ci:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.ref == 'refs/heads/main' && 'platform-services-deploy' || format('platform-services-{0}', github.ref) }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        id: rust
         with:
           components: clippy, rustfmt
       - uses: hashicorp/setup-terraform@v4
+
       - name: Cache Rust
         uses: actions/cache@v4
         with:
@@ -31,58 +32,50 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/target
-          key: rust-lint-${{ hashFiles('apps/Cargo.lock') }}
-          restore-keys: rust-lint-
+          key: rust-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/Cargo.lock') }}
+          restore-keys: rust-${{ steps.rust.outputs.cachekey }}-
+
       - name: Rust fmt
         working-directory: apps
         run: cargo fmt --check
+
       - name: Rust clippy
         working-directory: apps
         run: cargo clippy -- -D warnings
+
       - name: Rust tests
         working-directory: apps
         run: cargo test
+
       - name: Terraform fmt
         run: terraform fmt -check -recursive infrastructure/terraform/
 
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    needs: [lint-and-test]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: platform-services-deploy
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
+      # Deploy (main only)
       - uses: actions/setup-node@v4
+        if: github.ref == 'refs/heads/main'
         with:
           node-version: "24"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: hashicorp/setup-terraform@v4
-      - name: Cache Rust
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/target
-          key: rust-deploy-${{ hashFiles('apps/Cargo.lock') }}
-          restore-keys: rust-deploy-
+
       - name: Install cargo-lambda
+        if: github.ref == 'refs/heads/main'
         run: pip3 install cargo-lambda
+
       - uses: aws-actions/configure-aws-credentials@v5
+        if: github.ref == 'refs/heads/main'
         with:
           role-to-assume: ${{ secrets.OIDC_ROLE }}
           role-session-name: GitHubActions-${{ github.run_id }}
           aws-region: us-east-1
+
       - name: Deploy
+        if: github.ref == 'refs/heads/main'
         env:
           STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
         run: bash scripts/deploy.sh
 
   report:
     if: always()
-    needs: [lint-and-test, deploy]
+    needs: [ci]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,5 +86,5 @@ jobs:
           aws-region: us-east-1
       - uses: chris-arsenault/platform/.github/actions/report-build@main
         with:
-          lint-passed: ${{ needs.lint-and-test.result == 'success' }}
-          test-passed: ${{ needs.lint-and-test.result == 'success' }}
+          lint-passed: ${{ needs.ci.result == 'success' }}
+          test-passed: ${{ needs.ci.result == 'success' }}
