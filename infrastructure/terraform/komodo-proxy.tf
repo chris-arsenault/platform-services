@@ -45,7 +45,7 @@ resource "aws_iam_role_policy" "komodo_proxy_ssm" {
 
 resource "aws_security_group" "komodo_proxy" {
   name        = "platform-komodo-proxy"
-  description = "Komodo proxy Lambda — needs VPN route to TrueNAS"
+  description = "Komodo proxy Lambda - needs VPN route to TrueNAS"
   vpc_id      = nonsensitive(data.aws_ssm_parameter.vpc_id.value)
 
   egress {

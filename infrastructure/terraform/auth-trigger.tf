@@ -32,7 +32,7 @@ data "aws_iam_policy_document" "auth_trigger" {
 }
 
 resource "aws_iam_role" "auth_trigger" {
-  name               = "websites-auth-trigger"
+  name               = "platform-auth-trigger"
   assume_role_policy = data.aws_iam_policy_document.auth_trigger_assume.json
 }
 
@@ -42,13 +42,13 @@ resource "aws_iam_role_policy_attachment" "auth_trigger_basic" {
 }
 
 resource "aws_iam_role_policy" "auth_trigger" {
-  name   = "websites-auth-trigger-inline"
+  name   = "platform-auth-trigger-inline"
   role   = aws_iam_role.auth_trigger.id
   policy = data.aws_iam_policy_document.auth_trigger.json
 }
 
 resource "aws_lambda_function" "auth_trigger" {
-  function_name = "websites-auth-trigger"
+  function_name = "platform-auth-trigger"
   role          = aws_iam_role.auth_trigger.arn
   handler       = "handler.handler"
   runtime       = "nodejs24.x"
