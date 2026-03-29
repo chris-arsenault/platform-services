@@ -43,19 +43,6 @@ resource "aws_iam_role_policy" "komodo_proxy_ssm" {
   })
 }
 
-resource "aws_security_group" "komodo_proxy" {
-  name        = "platform-komodo-proxy"
-  description = "Komodo proxy Lambda - needs VPN route to TrueNAS"
-  vpc_id      = nonsensitive(data.aws_ssm_parameter.vpc_id.value)
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
 resource "aws_lambda_function" "komodo_proxy" {
   function_name = "platform-komodo-proxy"
   role          = aws_iam_role.komodo_proxy.arn
@@ -70,7 +57,7 @@ resource "aws_lambda_function" "komodo_proxy" {
 
   vpc_config {
     subnet_ids         = split(",", nonsensitive(data.aws_ssm_parameter.private_subnet_ids.value))
-    security_group_ids = [aws_security_group.komodo_proxy.id]
+    security_group_ids = [nonsensitive(data.aws_ssm_parameter.lambda_security_group_id.value)]
   }
 
   environment {
