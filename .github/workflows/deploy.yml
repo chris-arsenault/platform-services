@@ -67,11 +67,26 @@ jobs:
           role-session-name: GitHubActions-${{ github.run_id }}
           aws-region: us-east-1
 
-      - name: Deploy
+      - name: Build auth-trigger Lambda
+        if: github.ref == 'refs/heads/main'
+        working-directory: apps/auth-trigger
+        run: npm ci && npm run build
+
+      - name: Build Rust Lambdas
+        if: github.ref == 'refs/heads/main'
+        working-directory: apps
+        run: cargo lambda build --release
+
+      - name: Terraform deploy
         if: github.ref == 'refs/heads/main'
         env:
           STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
-        run: bash scripts/deploy.sh
+        run: |
+          terraform -chdir=infrastructure/terraform init -reconfigure \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="region=us-east-1" \
+            -backend-config="use_lockfile=true"
+          terraform -chdir=infrastructure/terraform apply -auto-approve
 
   report:
     if: always()
