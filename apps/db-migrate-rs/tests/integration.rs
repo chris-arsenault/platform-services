@@ -174,7 +174,7 @@ async fn test_migrate_tracks_in_schema_migrations() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get::<_, String>(0), "001_create.sql");
-    assert_eq!(rows[0].get::<_, bool>(2), false);
+    assert!(!rows[0].get::<_, bool>(2));
 }
 
 #[tokio::test]
@@ -250,7 +250,7 @@ async fn test_noop_records_without_executing() {
         .await
         .unwrap();
     assert_eq!(tracked.len(), 1);
-    assert_eq!(tracked[0].get::<_, bool>(0), true);
+    assert!(tracked[0].get::<_, bool>(0));
     assert_eq!(
         tracked[0].get::<_, Option<String>>(1),
         Some("Baseline import".into())
