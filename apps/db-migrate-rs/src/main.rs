@@ -260,10 +260,7 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
     // Create reader role if needed, publish credentials to SSM
     let reader_name = format!("{project}_reader");
     let reader_rows = pg
-        .query(
-            "SELECT 1 FROM pg_roles WHERE rolname = $1",
-            &[&reader_name],
-        )
+        .query("SELECT 1 FROM pg_roles WHERE rolname = $1", &[&reader_name])
         .await?;
     if reader_rows.is_empty() {
         let password = generate_password();

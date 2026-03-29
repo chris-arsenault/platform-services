@@ -200,10 +200,7 @@ pub async fn ensure_database(
     // Create reader role if needed
     let reader_name = format!("{project}_reader");
     let reader_rows = master
-        .query(
-            "SELECT 1 FROM pg_roles WHERE rolname = $1",
-            &[&reader_name],
-        )
+        .query("SELECT 1 FROM pg_roles WHERE rolname = $1", &[&reader_name])
         .await?;
     if reader_rows.is_empty() {
         let password = generate_password();
