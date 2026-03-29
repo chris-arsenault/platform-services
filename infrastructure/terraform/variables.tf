@@ -14,10 +14,9 @@ variable "cognito_clients" {
   description = "Map of app keys to Cognito client display names"
   type        = map(string)
   default = {
-    scorchbook = "scorchbook-ffcf7631-app"
-    svap       = "svap-app"
-    canonry    = "scorchbook-ffcf7631-canonry-app"
-    ahara      = "ahara-app"
+    svap    = "svap-app"
+    canonry = "scorchbook-ffcf7631-canonry-app"
+    ahara   = "ahara-app"
   }
 }
 
