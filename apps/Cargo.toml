@@ -1,5 +1,5 @@
 [workspace]
-members = ["db-migrate-rs", "ci-ingest-rs"]
+members = ["db-migrate-rs", "ci-ingest-rs", "komodo-proxy-rs"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -7,6 +7,7 @@ aws-config = "1"
 aws-sdk-s3 = "1"
 aws-sdk-ssm = "1"
 rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 lambda_runtime = "0.13"
 lambda_http = "0.13"
 serde = { version = "1", features = ["derive"] }
