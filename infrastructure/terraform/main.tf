@@ -27,7 +27,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project   = "Platform"
+      Project   = "platform"
       ManagedBy = "Terraform"
     }
   }
