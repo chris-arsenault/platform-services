@@ -1,5 +1,6 @@
 mod db;
 
+use aws_sdk_ssm::Client as SsmClient;
 use db::{BuildReport, BuildRow, SummaryRow};
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde::Serialize;
@@ -39,9 +40,35 @@ fn make_tls_connector() -> tokio_postgres_rustls::MakeRustlsConnect {
 async fn get_client() -> Result<Client, Error> {
     let host = env::var("DB_HOST")?;
     let port = env::var("DB_PORT").unwrap_or_else(|_| "5432".into());
-    let user = env::var("DB_USER")?;
-    let password = env::var("DB_PASSWORD")?;
     let db_name = env::var("DB_NAME")?;
+    let ssm_prefix = env::var("DB_SSM_PREFIX")?;
+
+    let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let ssm = SsmClient::new(&aws_config);
+
+    let user = ssm
+        .get_parameter()
+        .name(format!("{ssm_prefix}/username"))
+        .send()
+        .await?
+        .parameter()
+        .ok_or("SSM param not found")?
+        .value()
+        .ok_or("empty value")?
+        .to_string();
+
+    let password = ssm
+        .get_parameter()
+        .name(format!("{ssm_prefix}/password"))
+        .with_decryption(true)
+        .send()
+        .await?
+        .parameter()
+        .ok_or("empty value")?
+        .value()
+        .ok_or("empty value")?
+        .to_string();
+
     let connstr = format!(
         "host={host} port={port} user={user} password={password} dbname={db_name} sslmode=require"
     );

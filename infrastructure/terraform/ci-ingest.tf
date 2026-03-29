@@ -23,6 +23,21 @@ resource "aws_iam_role_policy_attachment" "ci_ingest_vpc" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
+resource "aws_iam_role_policy" "ci_ingest_ssm" {
+  name = "platform-ci-ingest-ssm"
+  role = aws_iam_role.ci_ingest.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = ["arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/platform/db/platform/*"]
+      }
+    ]
+  })
+}
+
 resource "aws_security_group" "ci_ingest" {
   name        = "platform-ci-ingest"
   description = "CI ingest Lambda"
@@ -60,12 +75,11 @@ resource "aws_lambda_function" "ci_ingest" {
 
   environment {
     variables = {
-      DB_HOST      = aws_db_instance.platform.address
-      DB_PORT      = tostring(aws_db_instance.platform.port)
-      DB_USER      = aws_db_instance.platform.username
-      DB_PASSWORD  = random_password.rds_master.result
-      DB_NAME      = aws_db_instance.platform.db_name
-      INGEST_TOKEN = random_password.ci_ingest_token.result
+      DB_HOST       = aws_db_instance.platform.address
+      DB_PORT       = tostring(aws_db_instance.platform.port)
+      DB_NAME       = aws_db_instance.platform.db_name
+      DB_SSM_PREFIX = "/platform/db/platform"
+      INGEST_TOKEN  = random_password.ci_ingest_token.result
     }
   }
 }

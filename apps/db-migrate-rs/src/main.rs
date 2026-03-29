@@ -257,11 +257,58 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
         );
     }
 
+    // Create reader role if needed, publish credentials to SSM
+    let reader_name = format!("{project}_reader");
+    let reader_rows = pg
+        .query(
+            "SELECT 1 FROM pg_roles WHERE rolname = $1",
+            &[&reader_name],
+        )
+        .await?;
+    if reader_rows.is_empty() {
+        let password = generate_password();
+        info!(project, role = reader_name, "Creating reader role");
+
+        pg.batch_execute(&format!(
+            "CREATE ROLE \"{reader_name}\" LOGIN PASSWORD '{password}'"
+        ))
+        .await?;
+
+        let ssm_prefix = format!("/platform/db/{project}/reader");
+
+        ssm.put_parameter()
+            .name(format!("{ssm_prefix}/username"))
+            .r#type(aws_sdk_ssm::types::ParameterType::String)
+            .value(&reader_name)
+            .overwrite(true)
+            .send()
+            .await?;
+
+        ssm.put_parameter()
+            .name(format!("{ssm_prefix}/password"))
+            .r#type(aws_sdk_ssm::types::ParameterType::SecureString)
+            .value(&password)
+            .overwrite(true)
+            .send()
+            .await?;
+
+        info!(
+            project,
+            role = reader_name,
+            "Reader role created and credentials published to SSM"
+        );
+    }
+
     // Always ensure grants are in place (idempotent — covers fresh databases after drop)
     pg.batch_execute(&format!(
-        "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\""
+        "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\";
+         GRANT CONNECT ON DATABASE \"{db_name}\" TO \"{reader_name}\";"
     ))
     .await?;
+
+    // Grant app role membership to admin so ALTER DEFAULT PRIVILEGES FOR ROLE works in PG16
+    pg.batch_execute(&format!("GRANT \"{role_name}\" TO CURRENT_USER"))
+        .await?;
 
     let db = connect_to(db_name).await?;
     db.batch_execute(&format!(
@@ -270,6 +317,17 @@ async fn ensure_database(project: &str, db_name: &str, ssm: &SsmClient) -> Resul
          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";
          GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{role_name}\";
          GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{role_name}\";"
+    ))
+    .await?;
+
+    db.batch_execute(&format!(
+        "GRANT USAGE ON SCHEMA public TO \"{reader_name}\";
+         GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{reader_name}\";
+         GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES FOR ROLE \"{role_name}\" IN SCHEMA public GRANT SELECT ON TABLES TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES FOR ROLE \"{role_name}\" IN SCHEMA public GRANT SELECT ON SEQUENCES TO \"{reader_name}\";"
     ))
     .await?;
 
@@ -859,6 +917,7 @@ async fn restore(
 
         // Re-grant app role permissions on the fresh database
         let role_name = format!("{project}_app");
+        let reader_name = format!("{project}_reader");
         db.batch_execute("SET search_path TO public").await?;
         db.batch_execute(&format!(
             "GRANT ALL ON SCHEMA public TO \"{role_name}\";
@@ -866,6 +925,18 @@ async fn restore(
              ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";
              GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{role_name}\";
              GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{role_name}\";"
+        )).await?;
+
+        // Re-grant reader role permissions on the fresh database
+        db.batch_execute(&format!(
+            "GRANT \"{role_name}\" TO CURRENT_USER;
+             GRANT USAGE ON SCHEMA public TO \"{reader_name}\";
+             GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{reader_name}\";
+             GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO \"{reader_name}\";
+             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO \"{reader_name}\";
+             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO \"{reader_name}\";
+             ALTER DEFAULT PRIVILEGES FOR ROLE \"{role_name}\" IN SCHEMA public GRANT SELECT ON TABLES TO \"{reader_name}\";
+             ALTER DEFAULT PRIVILEGES FOR ROLE \"{role_name}\" IN SCHEMA public GRANT SELECT ON SEQUENCES TO \"{reader_name}\";"
         )).await?;
 
         db.batch_execute(LOCAL_TRACKING).await?;

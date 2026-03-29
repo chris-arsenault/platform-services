@@ -197,11 +197,50 @@ pub async fn ensure_database(
         );
     }
 
+    // Create reader role if needed
+    let reader_name = format!("{project}_reader");
+    let reader_rows = master
+        .query(
+            "SELECT 1 FROM pg_roles WHERE rolname = $1",
+            &[&reader_name],
+        )
+        .await?;
+    if reader_rows.is_empty() {
+        let password = generate_password();
+        info!(project, role = reader_name, "Creating reader role");
+
+        master
+            .batch_execute(&format!(
+                "CREATE ROLE \"{reader_name}\" LOGIN PASSWORD '{password}'"
+            ))
+            .await?;
+
+        let ssm_prefix = format!("/platform/db/{project}/reader");
+        creds
+            .put_param(&format!("{ssm_prefix}/username"), &reader_name)
+            .await?;
+        creds
+            .put_secret(&format!("{ssm_prefix}/password"), &password)
+            .await?;
+
+        info!(
+            project,
+            role = reader_name,
+            "Reader role created and credentials published"
+        );
+    }
+
     // Always ensure grants
     master
         .batch_execute(&format!(
-            "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\""
+            "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\";
+             GRANT CONNECT ON DATABASE \"{db_name}\" TO \"{reader_name}\";"
         ))
+        .await?;
+
+    // Grant app role membership to admin so ALTER DEFAULT PRIVILEGES FOR ROLE works in PG16
+    master
+        .batch_execute(&format!("GRANT \"{role_name}\" TO CURRENT_USER"))
         .await?;
 
     let db = connect_fn(db_name).await?;
@@ -211,6 +250,17 @@ pub async fn ensure_database(
          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{role_name}\";
          GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{role_name}\";
          GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{role_name}\";"
+    ))
+    .await?;
+
+    db.batch_execute(&format!(
+        "GRANT USAGE ON SCHEMA public TO \"{reader_name}\";
+         GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{reader_name}\";
+         GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES FOR ROLE \"{role_name}\" IN SCHEMA public GRANT SELECT ON TABLES TO \"{reader_name}\";
+         ALTER DEFAULT PRIVILEGES FOR ROLE \"{role_name}\" IN SCHEMA public GRANT SELECT ON SEQUENCES TO \"{reader_name}\";"
     ))
     .await?;
 
