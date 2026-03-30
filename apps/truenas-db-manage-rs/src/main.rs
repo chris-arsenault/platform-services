@@ -68,18 +68,21 @@ async fn ensure_database(
     // Create database if needed
     let db_rows = pg
         .query("SELECT 1 FROM pg_database WHERE datname = $1", &[db_name])
-        .await?;
+        .await
+        .map_err(|e| format!("Failed to query pg_database: {e}"))?;
     if db_rows.is_empty() {
         info!(project, db = db_name, "Creating database");
         pg.batch_execute(&format!("CREATE DATABASE \"{db_name}\""))
-            .await?;
+            .await
+            .map_err(|e| format!("Failed to CREATE DATABASE {db_name}: {e}"))?;
         created = true;
     }
 
     // Create role if needed
     let role_rows = pg
         .query("SELECT 1 FROM pg_roles WHERE rolname = $1", &[&role_name])
-        .await?;
+        .await
+        .map_err(|e| format!("Failed to query pg_roles: {e}"))?;
     if role_rows.is_empty() {
         let password = generate_password();
         info!(project, role = role_name, "Creating application role");
@@ -87,7 +90,8 @@ async fn ensure_database(
         pg.batch_execute(&format!(
             "CREATE ROLE \"{role_name}\" LOGIN PASSWORD '{password}'"
         ))
-        .await?;
+        .await
+        .map_err(|e| format!("Failed to CREATE ROLE {role_name}: {e}"))?;
 
         // Publish credentials to SSM
         ssm.put_parameter()
@@ -122,7 +126,8 @@ async fn ensure_database(
     pg.batch_execute(&format!(
         "GRANT ALL PRIVILEGES ON DATABASE \"{db_name}\" TO \"{role_name}\""
     ))
-    .await?;
+    .await
+    .map_err(|e| format!("Failed to GRANT on database {db_name}: {e}"))?;
 
     // Connect to the project database to set schema grants
     let host = env::var("PG_HOST")?;
@@ -131,7 +136,9 @@ async fn ensure_database(
     let password = env::var("PG_ADMIN_PASSWORD")?;
     let connstr =
         format!("host={host} port={port} user={user} password={password} dbname={db_name}");
-    let (db, conn) = tokio_postgres::connect(&connstr, NoTls).await?;
+    let (db, conn) = tokio_postgres::connect(&connstr, NoTls)
+        .await
+        .map_err(|e| format!("Failed to connect to database {db_name}: {e}"))?;
     tokio::spawn(async move {
         if let Err(e) = conn.await {
             error!("DB connection error: {e}");
@@ -145,7 +152,8 @@ async fn ensure_database(
          GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{role_name}\";
          GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{role_name}\";"
     ))
-    .await?;
+    .await
+    .map_err(|e| format!("Failed to set schema grants for {role_name} on {db_name}: {e}"))?;
 
     info!(project, db = db_name, role = role_name, "Database ready");
 
@@ -173,9 +181,20 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let ssm = SsmClient::new(&aws_config);
-    let pg = connect_admin().await?;
 
-    let response = ensure_database(&pg, &ssm, &request.project, config).await?;
+    let pg = connect_admin().await.map_err(|e| {
+        let msg = format!("Failed to connect to TrueNAS Postgres: {e}");
+        error!(error = msg, "Connection failed");
+        msg
+    })?;
+
+    let response = ensure_database(&pg, &ssm, &request.project, config)
+        .await
+        .map_err(|e| {
+            let msg = format!("ensure_database failed for {}: {e}", request.project);
+            error!(error = msg, "Database setup failed");
+            msg
+        })?;
     Ok(serde_json::to_value(response)?)
 }
 
