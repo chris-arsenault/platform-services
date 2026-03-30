@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error as StdError;
 use tokio_postgres::{Client, NoTls};
+use std::time::Instant;
 use tracing::{error, info};
 
 #[derive(Deserialize)]
@@ -39,9 +40,13 @@ fn generate_password() -> String {
 }
 
 async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
+    let t0 = Instant::now();
+
     let host = env::var("PG_HOST")?;
     let port = env::var("PG_PORT").unwrap_or_else(|_| "5432".into());
+    info!(host = host, port = port, "Step 1: env vars read");
 
+    let t1 = Instant::now();
     let user = ssm
         .get_parameter()
         .name("/platform/truenas/pg-admin-user")
@@ -52,7 +57,9 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
         .parameter()
         .and_then(|p| p.value().map(|v| v.to_string()))
         .ok_or("SSM param /platform/truenas/pg-admin-user has no value")?;
+    info!(elapsed_ms = t1.elapsed().as_millis(), user = user, "Step 2: SSM admin user retrieved");
 
+    let t2 = Instant::now();
     let password = ssm
         .get_parameter()
         .name("/platform/truenas/pg-admin-password")
@@ -63,20 +70,26 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
         .parameter()
         .and_then(|p| p.value().map(|v| v.to_string()))
         .ok_or("SSM param /platform/truenas/pg-admin-password has no value")?;
+    info!(elapsed_ms = t2.elapsed().as_millis(), "Step 3: SSM admin password retrieved");
 
     info!(
         host = host,
         port = port,
         user = user,
-        "Connecting to TrueNAS Postgres"
+        total_ssm_ms = t1.elapsed().as_millis(),
+        "Step 4: Attempting Postgres connect"
     );
     let connstr =
         format!("host={host} port={port} user={user} password={password} dbname=postgres");
+    let t3 = Instant::now();
     // TrueNAS Postgres is on LAN via VPN, no TLS needed
     let (client, connection) = tokio_postgres::connect(&connstr, NoTls)
         .await
         .map_err(|e| {
-            let mut msg = format!("Postgres connect failed: {e}");
+            let mut msg = format!(
+                "Postgres connect failed after {}ms: {e}",
+                t3.elapsed().as_millis()
+            );
             let err: &dyn StdError = &e;
             let mut source = err.source();
             while let Some(s) = source {
@@ -85,11 +98,15 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
             }
             msg
         })?;
+    info!(elapsed_ms = t3.elapsed().as_millis(), "Step 5: Postgres connected");
+
     tokio::spawn(async move {
         if let Err(e) = connection.await {
             error!("DB connection error: {e}");
         }
     });
+
+    info!(total_ms = t0.elapsed().as_millis(), "Step 6: connect_admin complete");
     Ok(client)
 }
 

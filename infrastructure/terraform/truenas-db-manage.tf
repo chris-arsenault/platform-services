@@ -64,7 +64,7 @@ resource "aws_lambda_function" "truenas_db_manage" {
   filename         = data.archive_file.truenas_db_manage.output_path
   source_code_hash = data.archive_file.truenas_db_manage.output_base64sha256
 
-  timeout     = 30
+  timeout     = 120
   memory_size = 128
 
   vpc_config {
