@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::error::Error as StdError;
-use tokio_postgres::{Client, NoTls};
 use std::time::Instant;
+use tokio_postgres::{Client, NoTls};
 use tracing::{error, info};
 
 #[derive(Deserialize)]
@@ -57,7 +57,11 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
         .parameter()
         .and_then(|p| p.value().map(|v| v.to_string()))
         .ok_or("SSM param /platform/truenas/pg-admin-user has no value")?;
-    info!(elapsed_ms = t1.elapsed().as_millis(), user = user, "Step 2: SSM admin user retrieved");
+    info!(
+        elapsed_ms = t1.elapsed().as_millis(),
+        user = user,
+        "Step 2: SSM admin user retrieved"
+    );
 
     let t2 = Instant::now();
     let password = ssm
@@ -70,7 +74,10 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
         .parameter()
         .and_then(|p| p.value().map(|v| v.to_string()))
         .ok_or("SSM param /platform/truenas/pg-admin-password has no value")?;
-    info!(elapsed_ms = t2.elapsed().as_millis(), "Step 3: SSM admin password retrieved");
+    info!(
+        elapsed_ms = t2.elapsed().as_millis(),
+        "Step 3: SSM admin password retrieved"
+    );
 
     info!(
         host = host,
@@ -98,7 +105,10 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
             }
             msg
         })?;
-    info!(elapsed_ms = t3.elapsed().as_millis(), "Step 5: Postgres connected");
+    info!(
+        elapsed_ms = t3.elapsed().as_millis(),
+        "Step 5: Postgres connected"
+    );
 
     tokio::spawn(async move {
         if let Err(e) = connection.await {
@@ -106,7 +116,10 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
         }
     });
 
-    info!(total_ms = t0.elapsed().as_millis(), "Step 6: connect_admin complete");
+    info!(
+        total_ms = t0.elapsed().as_millis(),
+        "Step 6: connect_admin complete"
+    );
     Ok(client)
 }
 
