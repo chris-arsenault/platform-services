@@ -48,36 +48,6 @@ resource "aws_ssm_parameter" "alb_cognito_client_secret" {
   value = aws_cognito_user_pool_client.alb.client_secret
 }
 
-# SonarQube client (separate because it has a secret)
-resource "aws_ssm_parameter" "sonarqube_cognito_client_id" {
-  name  = "${local.ssm_prefix}/sonarqube/cognito-client-id"
-  type  = "String"
-  value = aws_cognito_user_pool_client.sonarqube.id
-}
-
-resource "aws_ssm_parameter" "sonarqube_cognito_client_secret" {
-  name  = "${local.ssm_prefix}/sonarqube/cognito-client-secret"
-  type  = "SecureString"
-  value = aws_cognito_user_pool_client.sonarqube.client_secret
-}
-
-# --- SonarQube CI token (will be populated after SonarQube is running) ---
-
-resource "aws_ssm_parameter" "sonarqube_url" {
-  name  = "${local.ssm_prefix}/sonarqube/url"
-  type  = "String"
-  value = "https://${local.sonarqube_domain}"
-}
-
-resource "aws_ssm_parameter" "sonarqube_ci_token" {
-  name  = "${local.ssm_prefix}/sonarqube/ci-token"
-  type  = "SecureString"
-  value = "PLACEHOLDER"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
 
 # --- Shared RDS ---
 

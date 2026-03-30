@@ -75,11 +75,26 @@ resource "aws_lambda_permission" "auth_trigger_cognito" {
   source_arn    = module.cognito.user_pool_arn
 }
 
+data "aws_ssm_parameters_by_path" "auth_trigger_clients" {
+  path            = "${local.ssm_prefix}/auth-trigger/clients"
+  with_decryption = false
+}
+
+locals {
+  # Merge platform-managed clients with client-registered entries from SSM
+  # Client projects publish their Cognito client ID to /platform/auth-trigger/clients/<name>
+  external_client_map = {
+    for i, name in data.aws_ssm_parameters_by_path.auth_trigger_clients.names :
+    data.aws_ssm_parameters_by_path.auth_trigger_clients.values[i] =>
+    replace(name, "${local.ssm_prefix}/auth-trigger/clients/", "")
+  }
+}
+
 resource "aws_ssm_parameter" "auth_client_map" {
   name = "${local.ssm_prefix}/auth-trigger/client-map"
   type = "String"
   value = jsonencode(merge(
     { for key, id in module.cognito.client_ids : id => key },
-    { (aws_cognito_user_pool_client.sonarqube.id) = "sonarqube" }
+    local.external_client_map
   ))
 }
