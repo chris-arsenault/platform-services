@@ -97,21 +97,11 @@ resource "aws_lambda_function" "truenas_db_manage" {
 
   environment {
     variables = {
-      PG_HOST           = "192.168.66.3"
-      PG_PORT           = "5432"
-      PG_ADMIN_USER     = nonsensitive(data.aws_ssm_parameter.truenas_pg_admin_user.value)
-      PG_ADMIN_PASSWORD = nonsensitive(data.aws_ssm_parameter.truenas_pg_admin_password.value)
-      PROJECT_MAP       = jsonencode({ for k, v in var.truenas_db_projects : k => v })
+      PG_HOST     = "192.168.66.3"
+      PG_PORT     = "5432"
+      PROJECT_MAP = jsonencode({ for k, v in var.truenas_db_projects : k => v })
     }
   }
-}
-
-data "aws_ssm_parameter" "truenas_pg_admin_user" {
-  name = "/platform/truenas/pg-admin-user"
-}
-
-data "aws_ssm_parameter" "truenas_pg_admin_password" {
-  name = "/platform/truenas/pg-admin-password"
 }
 
 # SSM outputs

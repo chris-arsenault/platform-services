@@ -37,11 +37,32 @@ fn generate_password() -> String {
         .collect()
 }
 
-async fn connect_admin() -> Result<Client, Error> {
+async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
     let host = env::var("PG_HOST")?;
     let port = env::var("PG_PORT").unwrap_or_else(|_| "5432".into());
-    let user = env::var("PG_ADMIN_USER")?;
-    let password = env::var("PG_ADMIN_PASSWORD")?;
+
+    let user = ssm
+        .get_parameter()
+        .name("/platform/truenas/pg-admin-user")
+        .with_decryption(true)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to read admin user from SSM: {e}"))?
+        .parameter()
+        .and_then(|p| p.value().map(|v| v.to_string()))
+        .ok_or("SSM param /platform/truenas/pg-admin-user has no value")?;
+
+    let password = ssm
+        .get_parameter()
+        .name("/platform/truenas/pg-admin-password")
+        .with_decryption(true)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to read admin password from SSM: {e}"))?
+        .parameter()
+        .and_then(|p| p.value().map(|v| v.to_string()))
+        .ok_or("SSM param /platform/truenas/pg-admin-password has no value")?;
+
     let connstr =
         format!("host={host} port={port} user={user} password={password} dbname=postgres");
     // TrueNAS Postgres is on LAN via VPN, no TLS needed
@@ -132,8 +153,26 @@ async fn ensure_database(
     // Connect to the project database to set schema grants
     let host = env::var("PG_HOST")?;
     let port = env::var("PG_PORT").unwrap_or_else(|_| "5432".into());
-    let user = env::var("PG_ADMIN_USER")?;
-    let password = env::var("PG_ADMIN_PASSWORD")?;
+    let user = ssm
+        .get_parameter()
+        .name("/platform/truenas/pg-admin-user")
+        .with_decryption(true)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to read admin user from SSM: {e}"))?
+        .parameter()
+        .and_then(|p| p.value().map(|v| v.to_string()))
+        .ok_or("SSM param /platform/truenas/pg-admin-user has no value")?;
+    let password = ssm
+        .get_parameter()
+        .name("/platform/truenas/pg-admin-password")
+        .with_decryption(true)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to read admin password from SSM: {e}"))?
+        .parameter()
+        .and_then(|p| p.value().map(|v| v.to_string()))
+        .ok_or("SSM param /platform/truenas/pg-admin-password has no value")?;
     let connstr =
         format!("host={host} port={port} user={user} password={password} dbname={db_name}");
     let (db, conn) = tokio_postgres::connect(&connstr, NoTls)
@@ -182,7 +221,7 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let ssm = SsmClient::new(&aws_config);
 
-    let pg = connect_admin().await.map_err(|e| {
+    let pg = connect_admin(&ssm).await.map_err(|e| {
         let msg = format!("Failed to connect to TrueNAS Postgres: {e}");
         error!(error = msg, "Connection failed");
         msg
