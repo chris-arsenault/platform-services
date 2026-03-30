@@ -4,6 +4,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
+use std::error::Error as StdError;
 use tokio_postgres::{Client, NoTls};
 use tracing::{error, info};
 
@@ -63,10 +64,27 @@ async fn connect_admin(ssm: &SsmClient) -> Result<Client, Error> {
         .and_then(|p| p.value().map(|v| v.to_string()))
         .ok_or("SSM param /platform/truenas/pg-admin-password has no value")?;
 
+    info!(
+        host = host,
+        port = port,
+        user = user,
+        "Connecting to TrueNAS Postgres"
+    );
     let connstr =
         format!("host={host} port={port} user={user} password={password} dbname=postgres");
     // TrueNAS Postgres is on LAN via VPN, no TLS needed
-    let (client, connection) = tokio_postgres::connect(&connstr, NoTls).await?;
+    let (client, connection) = tokio_postgres::connect(&connstr, NoTls)
+        .await
+        .map_err(|e| {
+            let mut msg = format!("Postgres connect failed: {e}");
+            let err: &dyn StdError = &e;
+            let mut source = err.source();
+            while let Some(s) = source {
+                msg.push_str(&format!(" caused by: {s}"));
+                source = s.source();
+            }
+            msg
+        })?;
     tokio::spawn(async move {
         if let Err(e) = connection.await {
             error!("DB connection error: {e}");
