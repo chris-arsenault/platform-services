@@ -55,29 +55,6 @@ resource "aws_iam_role_policy" "truenas_db_manage_ssm" {
   })
 }
 
-# Dedicated security group - egress only to TrueNAS Postgres
-resource "aws_security_group" "truenas_db_manage" {
-  name        = "platform-truenas-db-manage"
-  description = "TrueNAS DB manage Lambda - port 5432 to TrueNAS only"
-  vpc_id      = nonsensitive(data.aws_ssm_parameter.vpc_id.value)
-
-  egress {
-    description = "PostgreSQL to TrueNAS"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = ["192.168.66.3/32"]
-  }
-
-  egress {
-    description = "HTTPS for SSM API calls"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
 resource "aws_lambda_function" "truenas_db_manage" {
   function_name = "platform-truenas-db-manage"
   role          = aws_iam_role.truenas_db_manage.arn
@@ -92,7 +69,7 @@ resource "aws_lambda_function" "truenas_db_manage" {
 
   vpc_config {
     subnet_ids         = split(",", nonsensitive(data.aws_ssm_parameter.private_subnet_ids.value))
-    security_group_ids = [aws_security_group.truenas_db_manage.id]
+    security_group_ids = [nonsensitive(data.aws_ssm_parameter.lambda_security_group_id.value)]
   }
 
   environment {
