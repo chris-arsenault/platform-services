@@ -22,6 +22,13 @@ enum KomodoAction {
         secret: bool,
     },
 
+    /// Set a stack's environment field. Resolves SSM values, builds KEY=value lines,
+    /// and updates the stack config via the Komodo API. Docker Compose reads these from .env.
+    SetEnvironment {
+        stack: String,
+        variables: HashMap<String, String>,
+    },
+
     /// Forward a raw Komodo API request.
     /// e.g. { "type": "Api", "method": "POST", "path": "/execute/DeployStack", "body": {...} }
     Api {
@@ -180,6 +187,62 @@ async fn handle_set_variables(
     }
 }
 
+async fn handle_set_environment(
+    ssm: &SsmClient,
+    komodo: &KomodoClient,
+    stack: &str,
+    variables: &HashMap<String, String>,
+) -> ActionResult {
+    let mut env_lines = Vec::new();
+
+    for (name, value) in variables {
+        match resolve_ssm_value(ssm, value).await {
+            Ok(v) => env_lines.push(format!("{name}={v}")),
+            Err(e) => {
+                return ActionResult {
+                    action: "SetEnvironment".into(),
+                    success: false,
+                    body: None,
+                    error: Some(e),
+                };
+            }
+        }
+    }
+
+    let environment = env_lines.join("\n");
+    let body = serde_json::json!({
+        "id": stack,
+        "config": {
+            "environment": environment,
+        },
+    });
+
+    match komodo
+        .request("POST", "/write/UpdateStack", Some(&body))
+        .await
+    {
+        Ok(_) => {
+            info!(
+                stack = stack,
+                count = env_lines.len(),
+                "Stack environment updated"
+            );
+            ActionResult {
+                action: "SetEnvironment".into(),
+                success: true,
+                body: Some(serde_json::json!({ "count": env_lines.len() })),
+                error: None,
+            }
+        }
+        Err(e) => ActionResult {
+            action: "SetEnvironment".into(),
+            success: false,
+            body: None,
+            error: Some(e),
+        },
+    }
+}
+
 async fn handle_api(
     komodo: &KomodoClient,
     method: &str,
@@ -233,6 +296,9 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
         let result = match action {
             KomodoAction::SetVariables { variables, secret } => {
                 handle_set_variables(&ssm, &komodo, variables, *secret).await
+            }
+            KomodoAction::SetEnvironment { stack, variables } => {
+                handle_set_environment(&ssm, &komodo, stack, variables).await
             }
             KomodoAction::Api { method, path, body } => {
                 handle_api(&komodo, method, path, body.as_ref()).await
