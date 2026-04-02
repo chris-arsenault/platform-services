@@ -306,10 +306,16 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
         };
 
         let failed = !result.success;
+        if failed {
+            error!(
+                action = result.action,
+                error = result.error.as_deref().unwrap_or("unknown"),
+                "Action failed, aborting remaining actions"
+            );
+        }
         results.push(result);
 
         if failed {
-            error!("Action failed, aborting remaining actions");
             break;
         }
     }
