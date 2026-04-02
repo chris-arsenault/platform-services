@@ -7,7 +7,6 @@ use tracing::{error, info};
 
 #[derive(Deserialize)]
 struct Request {
-    /// Komodo API actions to execute in order.
     actions: Vec<KomodoAction>,
 }
 
@@ -15,7 +14,6 @@ struct Request {
 #[serde(tag = "type")]
 enum KomodoAction {
     /// Set Komodo variables. Values starting with "ssm:" are resolved from SSM.
-    /// e.g. { "type": "SetVariables", "variables": { "DB_HOST": "ssm:/platform/rds/address" } }
     SetVariables {
         variables: HashMap<String, String>,
         #[serde(default)]
@@ -29,14 +27,26 @@ enum KomodoAction {
         variables: HashMap<String, String>,
     },
 
-    /// Forward a raw Komodo API request.
-    /// e.g. { "type": "Api", "method": "POST", "path": "/execute/DeployStack", "body": {...} }
-    Api {
-        method: String,
-        path: String,
-        #[serde(default)]
-        body: Option<serde_json::Value>,
+    /// List all Komodo servers.
+    ListServers,
+
+    /// Create a new stack with git-backed compose.
+    CreateStack {
+        name: String,
+        server: String,
+        repo: String,
+        branch: String,
+        file_paths: Vec<String>,
+        #[serde(default = "default_git_provider")]
+        git_provider: String,
     },
+
+    /// Deploy an existing stack.
+    DeployStack { stack: String },
+}
+
+fn default_git_provider() -> String {
+    "github.com".into()
 }
 
 #[derive(Serialize)]
@@ -62,33 +72,23 @@ struct KomodoClient {
 }
 
 impl KomodoClient {
-    async fn request(
+    async fn post(
         &self,
-        method: &str,
         path: &str,
-        body: Option<&serde_json::Value>,
+        body: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let url = format!("{}{}", self.base_url, path);
-        let builder = match method.to_uppercase().as_str() {
-            "GET" => self.http.get(&url),
-            "POST" => self.http.post(&url),
-            "PATCH" => self.http.patch(&url),
-            "PUT" => self.http.put(&url),
-            "DELETE" => self.http.delete(&url),
-            _ => return Err(format!("Unsupported method: {method}")),
-        };
-
-        let builder = builder
+        let resp = self
+            .http
+            .post(&url)
             .header("x-api-key", &self.api_key)
-            .header("x-api-secret", &self.api_secret);
+            .header("x-api-secret", &self.api_secret)
+            .header("content-type", "application/json")
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
-        let builder = if let Some(b) = body {
-            builder.header("content-type", "application/json").json(b)
-        } else {
-            builder
-        };
-
-        let resp = builder.send().await.map_err(|e| e.to_string())?;
         let status = resp.status();
         let text = resp.text().await.map_err(|e| e.to_string())?;
 
@@ -142,7 +142,6 @@ async fn handle_set_variables(
         }
     }
 
-    // Push each variable to Komodo via the API
     for (name, value) in &resolved {
         let body = serde_json::json!({
             "name": name,
@@ -150,21 +149,17 @@ async fn handle_set_variables(
             "is_secret": secret,
         });
 
-        match komodo
-            .request("POST", "/write/CreateVariable", Some(&body))
-            .await
-        {
+        match komodo.post("/write/CreateVariable", &body).await {
             Ok(_) => {
                 info!(name = name, "Variable set");
             }
             Err(e) => {
-                // Try update if create fails (variable already exists)
                 let update_body = serde_json::json!({
                     "name": name,
                     "value": value,
                 });
                 if let Err(e2) = komodo
-                    .request("POST", "/write/UpdateVariableValue", Some(&update_body))
+                    .post("/write/UpdateVariableValue", &update_body)
                     .await
                 {
                     return ActionResult {
@@ -217,10 +212,7 @@ async fn handle_set_environment(
         },
     });
 
-    match komodo
-        .request("POST", "/write/UpdateStack", Some(&body))
-        .await
-    {
+    match komodo.post("/write/UpdateStack", &body).await {
         Ok(_) => {
             info!(
                 stack = stack,
@@ -243,21 +235,74 @@ async fn handle_set_environment(
     }
 }
 
-async fn handle_api(
-    komodo: &KomodoClient,
-    method: &str,
-    path: &str,
-    body: Option<&serde_json::Value>,
-) -> ActionResult {
-    match komodo.request(method, path, body).await {
+async fn handle_list_servers(komodo: &KomodoClient) -> ActionResult {
+    match komodo
+        .post("/read/ListServers", &serde_json::json!({}))
+        .await
+    {
         Ok(resp) => ActionResult {
-            action: format!("{method} {path}"),
+            action: "ListServers".into(),
             success: true,
             body: Some(resp),
             error: None,
         },
         Err(e) => ActionResult {
-            action: format!("{method} {path}"),
+            action: "ListServers".into(),
+            success: false,
+            body: None,
+            error: Some(e),
+        },
+    }
+}
+
+async fn handle_create_stack(
+    komodo: &KomodoClient,
+    name: &str,
+    server: &str,
+    repo: &str,
+    branch: &str,
+    file_paths: &[String],
+    git_provider: &str,
+) -> ActionResult {
+    let body = serde_json::json!({
+        "name": name,
+        "config": {
+            "server": server,
+            "repo": repo,
+            "branch": branch,
+            "file_paths": file_paths,
+            "git_provider": git_provider,
+        },
+    });
+
+    match komodo.post("/write/CreateStack", &body).await {
+        Ok(resp) => ActionResult {
+            action: "CreateStack".into(),
+            success: true,
+            body: Some(resp),
+            error: None,
+        },
+        Err(e) => ActionResult {
+            action: "CreateStack".into(),
+            success: false,
+            body: None,
+            error: Some(e),
+        },
+    }
+}
+
+async fn handle_deploy_stack(komodo: &KomodoClient, stack: &str) -> ActionResult {
+    let body = serde_json::json!({ "stack": stack });
+
+    match komodo.post("/execute/DeployStack", &body).await {
+        Ok(resp) => ActionResult {
+            action: "DeployStack".into(),
+            success: true,
+            body: Some(resp),
+            error: None,
+        },
+        Err(e) => ActionResult {
+            action: "DeployStack".into(),
             success: false,
             body: None,
             error: Some(e),
@@ -274,7 +319,6 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let ssm = SsmClient::new(&aws_config);
 
-    // Read Komodo connection details from SSM
     let api_key = resolve_ssm_value(&ssm, "ssm:/platform/komodo/api-key")
         .await
         .map_err(|e| -> Error { e.into() })?;
@@ -300,9 +344,27 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
             KomodoAction::SetEnvironment { stack, variables } => {
                 handle_set_environment(&ssm, &komodo, stack, variables).await
             }
-            KomodoAction::Api { method, path, body } => {
-                handle_api(&komodo, method, path, body.as_ref()).await
+            KomodoAction::ListServers => handle_list_servers(&komodo).await,
+            KomodoAction::CreateStack {
+                name,
+                server,
+                repo,
+                branch,
+                file_paths,
+                git_provider,
+            } => {
+                handle_create_stack(
+                    &komodo,
+                    name,
+                    server,
+                    repo,
+                    branch,
+                    file_paths,
+                    git_provider,
+                )
+                .await
             }
+            KomodoAction::DeployStack { stack } => handle_deploy_stack(&komodo, stack).await,
         };
 
         let failed = !result.success;
