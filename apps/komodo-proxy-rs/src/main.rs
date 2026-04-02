@@ -29,6 +29,18 @@ enum KomodoAction {
         variables: HashMap<String, String>,
     },
 
+    /// HTTP call to a service on the TrueNAS network (192.168.66.0/24 only).
+    /// Header/body values starting with "ssm:" are resolved from SSM.
+    /// Returns the response body for the caller to process.
+    HttpCall {
+        url: String,
+        method: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+        #[serde(default)]
+        form: HashMap<String, String>,
+    },
+
     /// Forward a raw Komodo API request.
     /// e.g. { "type": "Api", "method": "POST", "path": "/execute/DeployStack", "body": {...} }
     Api {
@@ -243,6 +255,114 @@ async fn handle_set_environment(
     }
 }
 
+async fn handle_http_call(
+    ssm: &SsmClient,
+    http: &reqwest::Client,
+    url: &str,
+    method: &str,
+    headers: &HashMap<String, String>,
+    form: &HashMap<String, String>,
+) -> ActionResult {
+    // Validate URL is within TrueNAS network
+    let host = url
+        .split("://")
+        .nth(1)
+        .and_then(|s| s.split('/').next())
+        .and_then(|s| s.split(':').next())
+        .unwrap_or("");
+    if !host.starts_with("192.168.66.") {
+        return ActionResult {
+            action: "HttpCall".into(),
+            success: false,
+            body: None,
+            error: Some(format!(
+                "URL host {host} not in allowed range 192.168.66.0/24"
+            )),
+        };
+    }
+
+    // Resolve SSM values in headers
+    let mut resolved_headers = Vec::new();
+    for (k, v) in headers {
+        match resolve_ssm_value(ssm, v).await {
+            Ok(resolved) => resolved_headers.push((k.clone(), resolved)),
+            Err(e) => {
+                return ActionResult {
+                    action: "HttpCall".into(),
+                    success: false,
+                    body: None,
+                    error: Some(e),
+                };
+            }
+        }
+    }
+
+    // Resolve SSM values in form fields
+    let mut resolved_form = Vec::new();
+    for (k, v) in form {
+        match resolve_ssm_value(ssm, v).await {
+            Ok(resolved) => resolved_form.push((k.clone(), resolved)),
+            Err(e) => {
+                return ActionResult {
+                    action: "HttpCall".into(),
+                    success: false,
+                    body: None,
+                    error: Some(e),
+                };
+            }
+        }
+    }
+
+    let builder = match method.to_uppercase().as_str() {
+        "GET" => http.get(url),
+        "POST" => http.post(url),
+        "PUT" => http.put(url),
+        "PATCH" => http.patch(url),
+        "DELETE" => http.delete(url),
+        _ => {
+            return ActionResult {
+                action: "HttpCall".into(),
+                success: false,
+                body: None,
+                error: Some(format!("Unsupported method: {method}")),
+            };
+        }
+    };
+
+    let mut builder = builder;
+    for (k, v) in &resolved_headers {
+        builder = builder.header(k, v);
+    }
+    if !resolved_form.is_empty() {
+        builder = builder.form(&resolved_form);
+    }
+
+    match builder.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let body_json: serde_json::Value =
+                serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text.clone()));
+            ActionResult {
+                action: "HttpCall".into(),
+                success: status.is_success(),
+                body: Some(serde_json::json!({ "status": status.as_u16(), "body": body_json })),
+                error: if status.is_success() {
+                    None
+                } else {
+                    Some(format!("HTTP {status}: {text}"))
+                },
+            }
+        }
+        Err(e) => ActionResult {
+            action: "HttpCall".into(),
+            success: false,
+            body: None,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
 async fn handle_api(
     komodo: &KomodoClient,
     method: &str,
@@ -300,6 +420,12 @@ async fn handler(event: LambdaEvent<serde_json::Value>) -> Result<serde_json::Va
             KomodoAction::SetEnvironment { stack, variables } => {
                 handle_set_environment(&ssm, &komodo, stack, variables).await
             }
+            KomodoAction::HttpCall {
+                url,
+                method,
+                headers,
+                form,
+            } => handle_http_call(&ssm, &komodo.http, url, method, headers, form).await,
             KomodoAction::Api { method, path, body } => {
                 handle_api(&komodo, method, path, body.as_ref()).await
             }
