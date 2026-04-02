@@ -92,7 +92,10 @@ resource "aws_db_instance" "platform" {
 
   multi_az            = false
   publicly_accessible = false
-  skip_final_snapshot = true
+  deletion_protection = true
+
+  skip_final_snapshot       = false
+  final_snapshot_identifier = "platform-shared-final"
 
   backup_retention_period = 7
   backup_window           = "04:00-05:00"
