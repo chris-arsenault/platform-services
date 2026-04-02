@@ -68,7 +68,7 @@ resource "aws_lambda_function" "truenas_db_manage" {
   memory_size = 128
 
   vpc_config {
-    subnet_ids         = split(",", nonsensitive(data.aws_ssm_parameter.private_subnet_ids.value))
+    subnet_ids         = data.aws_subnets.private.ids
     security_group_ids = [data.aws_security_group.platform_lambda.id]
   }
 

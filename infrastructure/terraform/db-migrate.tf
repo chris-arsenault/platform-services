@@ -116,7 +116,7 @@ resource "aws_lambda_function" "db_migrate" {
   memory_size = 512
 
   vpc_config {
-    subnet_ids         = split(",", nonsensitive(data.aws_ssm_parameter.private_subnet_ids.value))
+    subnet_ids         = data.aws_subnets.private.ids
     security_group_ids = [aws_security_group.db_migrate.id]
   }
 
