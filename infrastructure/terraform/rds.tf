@@ -14,8 +14,15 @@ data "aws_ssm_parameter" "alb_security_group_id" {
   name = "/platform/network/alb-security-group-id"
 }
 
-data "aws_ssm_parameter" "lambda_security_group_id" {
-  name = "/platform/network/lambda-security-group-id"
+data "aws_security_group" "platform_lambda" {
+  filter {
+    name   = "tag:sg:role"
+    values = ["lambda"]
+  }
+  filter {
+    name   = "tag:sg:scope"
+    values = ["platform"]
+  }
 }
 
 data "aws_ssm_parameter" "alb_listener_arn" {
