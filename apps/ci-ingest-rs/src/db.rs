@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Client;
 
+/// Schema is managed by the platform migration service (db-migrate).
+/// This constant is only used in integration tests where there is no migration service.
+#[cfg(test)]
+pub const SCHEMA: &str = include_str!("../../../db/migrations/001_create_ci_builds.sql");
+
+#[cfg(test)]
+pub async fn init_schema(client: &Client) -> Result<(), tokio_postgres::Error> {
+    client.batch_execute(SCHEMA).await
+}
+
 #[derive(Deserialize)]
 pub struct BuildReport {
     pub repo: Option<String>,
