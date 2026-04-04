@@ -734,6 +734,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-ssm",
  "chrono",
+ "ci-ingest",
  "lambda_http",
  "rustls 0.23.37",
  "rustls-pemfile",
@@ -912,6 +913,22 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "db-migrate-truenas"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-ssm",
+ "lambda_runtime",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3453,22 +3470,6 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
-]
-
-[[package]]
-name = "truenas-db-manage"
-version = "0.1.0"
-dependencies = [
- "aws-config",
- "aws-sdk-ssm",
- "lambda_runtime",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,10 +1,10 @@
 [package]
-name = "truenas-db-manage"
+name = "db-migrate-truenas"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "truenas-db-manage"
+name = "db-migrate-truenas"
 path = "src/main.rs"
 
 [dependencies]

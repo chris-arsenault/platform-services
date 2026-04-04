@@ -1,5 +1,5 @@
 # =============================================================================
-# TrueNAS Database Management Lambda
+# TrueNAS Database Migration Lambda
 #
 # Creates databases and app roles on TrueNAS PostgreSQL (192.168.66.3:5432).
 # Same pattern as db-migrate for shared RDS, but network-isolated to
@@ -14,30 +14,30 @@ variable "truenas_db_projects" {
   }
 }
 
-data "archive_file" "truenas_db_manage" {
+data "archive_file" "db_migrate_truenas" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/target/lambda/truenas-db-manage/bootstrap"
-  output_path = "${path.module}/truenas-db-manage-lambda.zip"
+  source_file = "${path.module}/../../apps/target/lambda/db-migrate-truenas/bootstrap"
+  output_path = "${path.module}/db-migrate-truenas-lambda.zip"
 }
 
-resource "aws_iam_role" "truenas_db_manage" {
-  name               = "platform-truenas-db-manage"
+resource "aws_iam_role" "db_migrate_truenas" {
+  name               = "platform-db-migrate-truenas"
   assume_role_policy = data.aws_iam_policy_document.auth_trigger_assume.json
 }
 
-resource "aws_iam_role_policy_attachment" "truenas_db_manage_basic" {
-  role       = aws_iam_role.truenas_db_manage.name
+resource "aws_iam_role_policy_attachment" "db_migrate_truenas_basic" {
+  role       = aws_iam_role.db_migrate_truenas.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-resource "aws_iam_role_policy_attachment" "truenas_db_manage_vpc" {
-  role       = aws_iam_role.truenas_db_manage.name
+resource "aws_iam_role_policy_attachment" "db_migrate_truenas_vpc" {
+  role       = aws_iam_role.db_migrate_truenas.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
-resource "aws_iam_role_policy" "truenas_db_manage_ssm" {
-  name = "platform-truenas-db-manage-ssm"
-  role = aws_iam_role.truenas_db_manage.id
+resource "aws_iam_role_policy" "db_migrate_truenas_ssm" {
+  name = "platform-db-migrate-truenas-ssm"
+  role = aws_iam_role.db_migrate_truenas.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -55,14 +55,14 @@ resource "aws_iam_role_policy" "truenas_db_manage_ssm" {
   })
 }
 
-resource "aws_lambda_function" "truenas_db_manage" {
-  function_name = "platform-truenas-db-manage"
-  role          = aws_iam_role.truenas_db_manage.arn
+resource "aws_lambda_function" "db_migrate_truenas" {
+  function_name = "platform-db-migrate-truenas"
+  role          = aws_iam_role.db_migrate_truenas.arn
   handler       = "bootstrap"
   runtime       = "provided.al2023"
 
-  filename         = data.archive_file.truenas_db_manage.output_path
-  source_code_hash = data.archive_file.truenas_db_manage.output_base64sha256
+  filename         = data.archive_file.db_migrate_truenas.output_path
+  source_code_hash = data.archive_file.db_migrate_truenas.output_base64sha256
 
   timeout     = 120
   memory_size = 128
@@ -82,8 +82,8 @@ resource "aws_lambda_function" "truenas_db_manage" {
 }
 
 # SSM outputs
-resource "aws_ssm_parameter" "truenas_db_manage_function" {
+resource "aws_ssm_parameter" "db_migrate_truenas_function" {
   name  = "${local.ssm_prefix}/truenas-db/function-name"
   type  = "String"
-  value = aws_lambda_function.truenas_db_manage.function_name
+  value = aws_lambda_function.db_migrate_truenas.function_name
 }
