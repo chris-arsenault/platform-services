@@ -97,6 +97,11 @@ jobs:
         working-directory: apps
         run: cargo lambda build --release
 
+      - uses: chris-arsenault/platform/.github/actions/run-migrations@main
+        if: github.ref == 'refs/heads/main'
+        with:
+          project: platform
+
       - name: Terraform deploy
         if: github.ref == 'refs/heads/main'
         env:

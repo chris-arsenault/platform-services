@@ -79,7 +79,6 @@ async fn get_client() -> Result<Client, Error> {
             error!("DB connection error: {e}");
         }
     });
-    db::init_schema(&client).await?;
     Ok(client)
 }
 
