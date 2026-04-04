@@ -71,11 +71,6 @@ jobs:
           extra-args: -Dsonar.rust.lcov.reportPaths=apps/coverage/lcov.info
 
       # Deploy (main only)
-      - uses: actions/setup-node@v4
-        if: github.ref == 'refs/heads/main'
-        with:
-          node-version: "24"
-
       - name: Install cargo-lambda
         if: github.ref == 'refs/heads/main'
         run: pip3 install cargo-lambda
@@ -87,12 +82,7 @@ jobs:
           role-session-name: GitHubActions-${{ github.run_id }}
           aws-region: us-east-1
 
-      - name: Build auth-trigger Lambda
-        if: github.ref == 'refs/heads/main'
-        working-directory: apps/auth-trigger
-        run: npm ci && npm run build
-
-      - name: Build Rust Lambdas
+      - name: Build Lambdas
         if: github.ref == 'refs/heads/main'
         working-directory: apps
         run: cargo lambda build --release

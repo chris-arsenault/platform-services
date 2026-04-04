@@ -5,7 +5,7 @@
 
 data "archive_file" "auth_trigger" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/auth-trigger/dist/handler.js"
+  source_file = "${path.module}/../../apps/target/lambda/auth-trigger/bootstrap"
   output_path = "${path.module}/auth-trigger-lambda.zip"
 }
 
@@ -50,8 +50,8 @@ resource "aws_iam_role_policy" "auth_trigger" {
 resource "aws_lambda_function" "auth_trigger" {
   function_name = "platform-auth-trigger"
   role          = aws_iam_role.auth_trigger.arn
-  handler       = "handler.handler"
-  runtime       = "nodejs24.x"
+  handler       = "bootstrap"
+  runtime       = "provided.al2023"
 
   filename         = data.archive_file.auth_trigger.output_path
   source_code_hash = data.archive_file.auth_trigger.output_base64sha256
