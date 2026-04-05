@@ -1,3 +1,6 @@
 project: platform
 prefix: platform
 migrations: db/migrations
+stack:
+  - rust
+  - terraform
