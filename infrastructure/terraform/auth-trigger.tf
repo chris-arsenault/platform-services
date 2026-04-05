@@ -5,7 +5,7 @@
 
 data "archive_file" "auth_trigger" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/target/lambda/auth-trigger/bootstrap"
+  source_file = "${path.module}/../../backend/target/lambda/auth-trigger/bootstrap"
   output_path = "${path.module}/auth-trigger-lambda.zip"
 }
 

@@ -35,23 +35,23 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            apps/target
-          key: rust-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/Cargo.lock') }}
+            backend/target
+          key: rust-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: rust-${{ steps.rust.outputs.cachekey }}-
 
       - name: Lint rustfmt
-        working-directory: apps
+        working-directory: backend
         run: cargo fmt --check
 
       - name: Lint clippy
-        working-directory: apps
+        working-directory: backend
         run: cargo clippy -- -D warnings
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
 
       - name: Test rust
-        working-directory: apps
+        working-directory: backend
         run: cargo tarpaulin --out lcov --output-dir coverage
 
       - name: Lint terraform
@@ -68,9 +68,9 @@ jobs:
         continue-on-error: true
         with:
           project-key: platform-services
-          sources: apps,infrastructure/terraform
+          sources: backend,infrastructure/terraform
           exclusions: "**/target/**,**/node_modules/**,**/dist/**,**/.terraform/**"
-          extra-args: -Dsonar.rust.lcov.reportPaths=apps/coverage/lcov.info
+          extra-args: -Dsonar.rust.lcov.reportPaths=backend/coverage/lcov.info
 
       # Deploy (main only)
       - name: Install cargo-lambda
@@ -86,7 +86,7 @@ jobs:
 
       - name: Build Lambdas
         if: github.ref == 'refs/heads/main'
-        working-directory: apps
+        working-directory: backend
         run: cargo lambda build --release
 
       - uses: chris-arsenault/platform/.github/actions/run-migrations@main

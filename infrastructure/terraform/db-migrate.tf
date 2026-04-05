@@ -51,7 +51,7 @@ resource "aws_s3_bucket_public_access_block" "migrations" {
 
 data "archive_file" "db_migrate" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/target/lambda/db-migrate/bootstrap"
+  source_file = "${path.module}/../../backend/target/lambda/db-migrate/bootstrap"
   output_path = "${path.module}/db-migrate-lambda.zip"
 }
 

@@ -3,22 +3,22 @@
 ci: lint fmt test terraform-fmt-check
 
 lint:
-	cd apps && cargo clippy -- -D warnings
+	cd backend && cargo clippy -- -D warnings
 
 fmt:
-	cd apps && cargo fmt --check
+	cd backend && cargo fmt --check
 
 test:
-	cd apps && cargo test --lib
+	cd backend && cargo test --lib
 
 test-integration:
-	cd apps && cargo test --test '*'
+	cd backend && cargo test --test '*'
 
 terraform-fmt-check:
 	terraform fmt -check -recursive infrastructure/terraform/
 
 build:
-	cd apps && cargo lambda build --release
+	cd backend && cargo lambda build --release
 
 deploy:
 	scripts/deploy.sh

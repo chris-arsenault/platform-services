@@ -16,7 +16,7 @@ variable "truenas_db_projects" {
 
 data "archive_file" "db_migrate_truenas" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/target/lambda/db-migrate-truenas/bootstrap"
+  source_file = "${path.module}/../../backend/target/lambda/db-migrate-truenas/bootstrap"
   output_path = "${path.module}/db-migrate-truenas-lambda.zip"
 }
 

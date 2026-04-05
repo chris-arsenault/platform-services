@@ -7,7 +7,7 @@
 
 data "archive_file" "komodo_proxy" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/target/lambda/komodo-proxy/bootstrap"
+  source_file = "${path.module}/../../backend/target/lambda/komodo-proxy/bootstrap"
   output_path = "${path.module}/komodo-proxy-lambda.zip"
 }
 

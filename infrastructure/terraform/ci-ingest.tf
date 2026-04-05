@@ -4,7 +4,7 @@
 
 data "archive_file" "ci_ingest" {
   type        = "zip"
-  source_file = "${path.module}/../../apps/target/lambda/ci-ingest/bootstrap"
+  source_file = "${path.module}/../../backend/target/lambda/ci-ingest/bootstrap"
   output_path = "${path.module}/ci-ingest-lambda.zip"
 }
 
