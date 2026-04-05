@@ -37,22 +37,22 @@ jobs:
           key: rust-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/Cargo.lock') }}
           restore-keys: rust-${{ steps.rust.outputs.cachekey }}-
 
-      - name: Rust fmt
+      - name: Lint rustfmt
         working-directory: apps
         run: cargo fmt --check
 
-      - name: Rust clippy
+      - name: Lint clippy
         working-directory: apps
         run: cargo clippy -- -D warnings
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
 
-      - name: Rust tests with coverage
+      - name: Test rust
         working-directory: apps
         run: cargo tarpaulin --out lcov --output-dir coverage
 
-      - name: Terraform fmt
+      - name: Lint terraform
         run: terraform fmt -check -recursive infrastructure/terraform/
 
       # SonarQube
@@ -115,6 +115,3 @@ jobs:
           role-session-name: GitHubActions-${{ github.run_id }}
           aws-region: us-east-1
       - uses: chris-arsenault/platform/.github/actions/report-build@main
-        with:
-          lint-passed: ${{ needs.ci.result == 'success' }}
-          test-passed: ${{ needs.ci.result == 'success' }}
