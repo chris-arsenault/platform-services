@@ -16,7 +16,6 @@ variable "cognito_clients" {
   default = {
     svap    = "svap-app"
     canonry = "scorchbook-ffcf7631-canonry-app"
-    ahara   = "ahara-app"
   }
 }
 
