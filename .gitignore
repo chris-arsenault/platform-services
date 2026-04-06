@@ -7,3 +7,5 @@ dist/
 .terraform.lock.hcl
 *.zip
 *.tfplan
+target/
+target-clippy/
