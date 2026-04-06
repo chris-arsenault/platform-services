@@ -32,7 +32,7 @@ module "ci_ingest" {
 
   lambdas = {
     ingest = {
-      zip    = "${path.module}/../../backend/target/lambda/ci-ingest/bootstrap.zip"
+      binary = "${path.module}/../../backend/target/lambda/ci-ingest/bootstrap"
       routes = [{ priority = 150, paths = ["/*"], authenticated = false }]
     }
   }

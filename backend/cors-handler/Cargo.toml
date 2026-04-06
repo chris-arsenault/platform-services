@@ -1,0 +1,14 @@
+[package]
+name = "cors-handler"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "cors-handler"
+path = "src/main.rs"
+
+[dependencies]
+lambda_http = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

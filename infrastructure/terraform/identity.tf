@@ -15,7 +15,7 @@ module "cognito" {
   domain_name         = local.auth_domain
   domain_zone_name    = var.domain_name
   clients             = var.cognito_clients
-  pre_auth_lambda_arn = aws_lambda_function.auth_trigger.arn
+  pre_auth_lambda_arn = module.auth_trigger.function_arn
 }
 
 # =============================================================================
