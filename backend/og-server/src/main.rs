@@ -180,6 +180,40 @@ async fn resolve_og(client: &Client, config: &OgConfig, site_url: &str, path: &s
     }
 }
 
+/// OG resolution for static sites with no database. Matches routes by path and
+/// uses each route's `title`/`description`/`image` fields as literal values
+/// (no template substitution). Falls through to defaults for unmatched paths.
+///
+/// Activated when the `DB_HOST` env var is unset — callers in the handler
+/// check this before invoking.
+fn resolve_og_no_db(config: &OgConfig, site_url: &str, path: &str) -> OgTags {
+    if let Some(matched) = match_route(path, &config.routes) {
+        let image_raw = matched.config.image.clone().unwrap_or_default();
+        let image = if image_raw.is_empty() {
+            resolve_image(&config.defaults.image, site_url)
+        } else {
+            resolve_image(&image_raw, site_url)
+        };
+
+        return OgTags {
+            title: matched.config.title.clone(),
+            description: matched.config.description.clone(),
+            image,
+            url: format!("{site_url}{path}"),
+            og_type: matched.config.og_type.clone(),
+        };
+    }
+
+    // Unmatched: use defaults
+    OgTags {
+        title: config.defaults.title.clone(),
+        description: config.defaults.description.clone(),
+        image: resolve_image(&config.defaults.image, site_url),
+        url: format!("{site_url}{path}"),
+        og_type: "website".into(),
+    }
+}
+
 fn resolve_image(image: &str, site_url: &str) -> String {
     if image.starts_with("http://") || image.starts_with("https://") {
         image.to_string()
@@ -362,36 +396,41 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
 
     let config = get_config();
 
-    let guard = match ensure_client().await {
-        Ok(g) => g,
-        Err(e) => {
-            warn!(error = %e, "DB connection failed, using default OG tags");
-            let og = OgTags {
-                title: config.og.defaults.title.clone(),
-                description: config.og.defaults.description.clone(),
-                image: resolve_image(&config.og.defaults.image, &config.site_url),
-                url: format!("{}{}", config.site_url, path),
-                og_type: "website".into(),
-            };
-            let html = render_html(
-                &og,
-                &config.og.site_name,
-                &config.entry_js,
-                &config.entry_css,
-            );
-            return Ok(Response::builder()
-                .status(200)
-                .header("content-type", "text/html; charset=utf-8")
-                .header("cache-control", "public, s-maxage=3600, max-age=0")
-                .body(Body::Text(html))?);
+    // Two modes:
+    //   - DB_HOST set   → dynamic mode: query DB, render templates
+    //   - DB_HOST unset → static mode: route literals only, no DB connection
+    // When DB is configured but the connection fails, fall back to defaults only
+    // (no route matching) so projects like tastebase don't leak unrendered
+    // `{{placeholder}}` strings into OG tags during outages.
+    let db_configured = env::var("DB_HOST").is_ok();
+
+    let (og, db_failed) = if db_configured {
+        match ensure_client().await {
+            Ok(guard) => {
+                let client = guard.as_ref().expect("client initialized on success");
+                let og = resolve_og(client, &config.og, &config.site_url, &path).await;
+                (og, false)
+            }
+            Err(e) => {
+                warn!(error = %e, "DB connection failed, using default OG tags");
+                let og = OgTags {
+                    title: config.og.defaults.title.clone(),
+                    description: config.og.defaults.description.clone(),
+                    image: resolve_image(&config.og.defaults.image, &config.site_url),
+                    url: format!("{}{}", config.site_url, path),
+                    og_type: "website".into(),
+                };
+                (og, true)
+            }
         }
+    } else {
+        let og = resolve_og_no_db(&config.og, &config.site_url, &path);
+        (og, false)
     };
-    let client = guard.as_ref().unwrap();
 
-    let og = resolve_og(client, &config.og, &config.site_url, &path).await;
-
-    // Matched routes get longer cache (content changes less often than defaults)
-    let cache_control = if match_route(&path, &config.og.routes).is_some() {
+    // Matched routes get longer cache (content changes less often than defaults).
+    // On DB failure we keep the short cache to recover quickly once DB is back.
+    let cache_control = if !db_failed && match_route(&path, &config.og.routes).is_some() {
         "public, s-maxage=86400, max-age=0"
     } else {
         "public, s-maxage=3600, max-age=0"
@@ -429,4 +468,95 @@ async fn main() -> Result<(), Error> {
     let _ = get_config();
 
     run(service_fn(handler)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> OgConfig {
+        OgConfig {
+            site_name: "Test Site".into(),
+            defaults: OgDefaults {
+                title: "Default Title".into(),
+                description: "Default Description".into(),
+                image: "/default.png".into(),
+            },
+            routes: vec![
+                RouteConfig {
+                    pattern: "/about".into(),
+                    query: String::new(),
+                    match_field: None,
+                    title: "About Us".into(),
+                    description: "Learn more about the project".into(),
+                    image: Some("/about.png".into()),
+                    og_type: "website".into(),
+                },
+                RouteConfig {
+                    pattern: "/".into(),
+                    query: String::new(),
+                    match_field: None,
+                    title: "Home".into(),
+                    description: "Welcome".into(),
+                    image: None,
+                    og_type: "website".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn resolve_og_no_db_uses_literal_fields_for_matched_route() {
+        let config = test_config();
+        let og = resolve_og_no_db(&config, "https://example.com", "/about");
+        assert_eq!(og.title, "About Us");
+        assert_eq!(og.description, "Learn more about the project");
+        assert_eq!(og.image, "https://example.com/about.png");
+        assert_eq!(og.url, "https://example.com/about");
+        assert_eq!(og.og_type, "website");
+    }
+
+    #[test]
+    fn resolve_og_no_db_falls_back_to_default_image_when_route_has_none() {
+        let config = test_config();
+        let og = resolve_og_no_db(&config, "https://example.com", "/");
+        assert_eq!(og.title, "Home");
+        assert_eq!(og.description, "Welcome");
+        assert_eq!(og.image, "https://example.com/default.png");
+    }
+
+    #[test]
+    fn resolve_og_no_db_uses_defaults_for_unmatched_path() {
+        let config = test_config();
+        let og = resolve_og_no_db(&config, "https://example.com", "/nonexistent");
+        assert_eq!(og.title, "Default Title");
+        assert_eq!(og.description, "Default Description");
+        assert_eq!(og.image, "https://example.com/default.png");
+        assert_eq!(og.og_type, "website");
+        assert_eq!(og.url, "https://example.com/nonexistent");
+    }
+
+    #[test]
+    fn resolve_og_no_db_does_not_substitute_templates() {
+        // Literal braces in title should pass through unchanged in no-db mode.
+        let config = OgConfig {
+            site_name: "Test".into(),
+            defaults: OgDefaults {
+                title: "Default".into(),
+                description: "Default".into(),
+                image: "/d.png".into(),
+            },
+            routes: vec![RouteConfig {
+                pattern: "/page".into(),
+                query: String::new(),
+                match_field: None,
+                title: "Literal {{unused}} Title".into(),
+                description: "Literal description".into(),
+                image: None,
+                og_type: "website".into(),
+            }],
+        };
+        let og = resolve_og_no_db(&config, "https://example.com", "/page");
+        assert_eq!(og.title, "Literal {{unused}} Title");
+    }
 }
