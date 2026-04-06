@@ -9,6 +9,7 @@ resource "random_password" "ci_ingest_token" {
 
 module "ci_ingest" {
   source   = "git::https://github.com/chris-arsenault/ahara-tf-patterns.git//modules/alb-api"
+  prefix   = "platform-ci-ingest"
   hostname = "ci.ahara.io"
 
   environment = {
