@@ -12,12 +12,11 @@ tf() {
   terraform -chdir="${TF_DIR}" "$@"
 }
 
-echo "Building auth-trigger Lambda..."
-AUTH_DIR="${ROOT_DIR}/apps/auth-trigger"
-(cd "${AUTH_DIR}" && npm ci && npm run build)
+echo "Building Lambdas..."
+(cd "${ROOT_DIR}/backend" && cargo lambda build --release)
 
-echo "Building Rust Lambdas..."
-(cd "${ROOT_DIR}/apps" && cargo lambda build --release)
+echo "Running migrations..."
+#db-migrate
 
 echo "Initializing Terraform backend..."
 tf init -reconfigure \
@@ -29,5 +28,3 @@ echo "Applying Terraform..."
 tf apply -auto-approve
 
 echo "Platform services deployed."
-echo "Cognito user pool ID:"
-tf output -raw cognito_user_pool_id 2>/dev/null || echo "(not available)"

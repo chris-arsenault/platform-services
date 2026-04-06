@@ -19,6 +19,11 @@ resource "aws_iam_role_policy_attachment" "cors_handler" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy_attachment" "cors_handler_vpc" {
+  role       = aws_iam_role.cors_handler.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 module "cors_handler" {
   source   = "git::https://github.com/chris-arsenault/ahara-tf-patterns.git//modules/lambda"
   name     = "platform-cors-handler"

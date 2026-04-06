@@ -35,6 +35,11 @@ resource "aws_iam_role_policy_attachment" "auth_trigger_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy_attachment" "auth_trigger_vpc" {
+  role       = aws_iam_role.auth_trigger.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 resource "aws_iam_role_policy" "auth_trigger" {
   name   = "platform-auth-trigger-inline"
   role   = aws_iam_role.auth_trigger.id
