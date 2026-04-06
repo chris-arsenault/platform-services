@@ -146,28 +146,28 @@ struct OgTags {
 }
 
 async fn resolve_og(client: &Client, config: &OgConfig, site_url: &str, path: &str) -> OgTags {
-    if let Some(matched) = match_route(path, &config.routes) {
-        if let Some(row) = query_og(client, matched.config, &matched.params).await {
-            let image_raw = matched
-                .config
-                .image
-                .as_deref()
-                .map(|t| render_template(t, &row))
-                .unwrap_or_default();
-            let image = if image_raw.is_empty() {
-                resolve_image(&config.defaults.image, site_url)
-            } else {
-                resolve_image(&image_raw, site_url)
-            };
+    if let Some(matched) = match_route(path, &config.routes)
+        && let Some(row) = query_og(client, matched.config, &matched.params).await
+    {
+        let image_raw = matched
+            .config
+            .image
+            .as_deref()
+            .map(|t| render_template(t, &row))
+            .unwrap_or_default();
+        let image = if image_raw.is_empty() {
+            resolve_image(&config.defaults.image, site_url)
+        } else {
+            resolve_image(&image_raw, site_url)
+        };
 
-            return OgTags {
-                title: render_template(&matched.config.title, &row),
-                description: render_template(&matched.config.description, &row),
-                image,
-                url: format!("{site_url}{path}"),
-                og_type: matched.config.og_type.clone(),
-            };
-        }
+        return OgTags {
+            title: render_template(&matched.config.title, &row),
+            description: render_template(&matched.config.description, &row),
+            image,
+            url: format!("{site_url}{path}"),
+            og_type: matched.config.og_type.clone(),
+        };
     }
 
     // Default OG tags
