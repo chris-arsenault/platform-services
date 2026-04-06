@@ -1,5 +1,5 @@
 [workspace]
-members = ["auth-trigger", "ci-ingest", "db-migrate", "db-migrate-truenas", "komodo-proxy"]
+members = ["auth-trigger", "ci-ingest", "db-migrate", "db-migrate-truenas", "komodo-proxy", "og-server"]
 resolver = "2"
 
 [workspace.dependencies]

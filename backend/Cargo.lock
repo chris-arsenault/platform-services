@@ -2080,6 +2080,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "og-server"
+version = "0.1.0"
+dependencies = [
+ "lambda_http",
+ "rustls 0.23.37",
+ "rustls-pemfile",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

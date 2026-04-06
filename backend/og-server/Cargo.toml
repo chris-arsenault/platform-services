@@ -1,0 +1,21 @@
+[package]
+name = "og-server"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "og-server"
+path = "src/main.rs"
+
+[dependencies]
+lambda_http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+tokio-postgres-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rustls-pki-types = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
