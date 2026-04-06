@@ -1,8 +1,7 @@
 /// Platform OG Server — generic Lambda that serves HTML with dynamic OpenGraph
 /// meta tags. Configured via OG_CONFIG env var (JSON). Each project deploys
 /// its own instance with project-specific route config and DB credentials.
-
-use lambda_http::{run, service_fn, Body, Error, Request, Response};
+use lambda_http::{Body, Error, Request, Response, run, service_fn};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
@@ -146,12 +145,7 @@ struct OgTags {
     og_type: String,
 }
 
-async fn resolve_og(
-    client: &Client,
-    config: &OgConfig,
-    site_url: &str,
-    path: &str,
-) -> OgTags {
+async fn resolve_og(client: &Client, config: &OgConfig, site_url: &str, path: &str) -> OgTags {
     if let Some(matched) = match_route(path, &config.routes) {
         if let Some(row) = query_og(client, matched.config, &matched.params).await {
             let image_raw = matched
@@ -218,8 +212,10 @@ async fn query_og(
         None
     } else {
         // Direct param matching: pass URL params as $1, $2, etc.
-        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            params.iter().map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
         let row = client.query_opt(&route.query, &param_refs).await.ok()??;
         let mut map = HashMap::new();
         for (i, col) in row.columns().iter().enumerate() {
@@ -234,12 +230,7 @@ async fn query_og(
 // HTML rendering
 // =============================================================================
 
-fn render_html(
-    og: &OgTags,
-    site_name: &str,
-    entry_js: &str,
-    entry_css: &str,
-) -> String {
+fn render_html(og: &OgTags, site_name: &str, entry_js: &str, entry_css: &str) -> String {
     let title = html_escape(&og.title);
     let desc = html_escape(&og.description);
     let image = html_escape(&og.image);
@@ -382,7 +373,12 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
                 url: format!("{}{}", config.site_url, path),
                 og_type: "website".into(),
             };
-            let html = render_html(&og, &config.og.site_name, &config.entry_js, &config.entry_css);
+            let html = render_html(
+                &og,
+                &config.og.site_name,
+                &config.entry_js,
+                &config.entry_css,
+            );
             return Ok(Response::builder()
                 .status(200)
                 .header("content-type", "text/html; charset=utf-8")
@@ -401,7 +397,12 @@ async fn handler(req: Request) -> Result<Response<Body>, Error> {
         "public, s-maxage=3600, max-age=0"
     };
 
-    let html = render_html(&og, &config.og.site_name, &config.entry_js, &config.entry_css);
+    let html = render_html(
+        &og,
+        &config.og.site_name,
+        &config.entry_js,
+        &config.entry_css,
+    );
 
     Ok(Response::builder()
         .status(200)
