@@ -25,7 +25,6 @@ module "cors_handler" {
   binary   = "${path.module}/../../backend/target/lambda/cors-handler/bootstrap"
   role_arn = aws_iam_role.cors_handler.arn
   timeout  = 3
-  memory   = 128
 }
 
 resource "aws_lb_target_group" "cors_handler" {

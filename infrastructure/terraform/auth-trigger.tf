@@ -47,7 +47,6 @@ module "auth_trigger" {
   binary   = "${path.module}/../../backend/target/lambda/auth-trigger/bootstrap"
   role_arn = aws_iam_role.auth_trigger.arn
   timeout  = 5
-  memory   = 128
 
   environment = {
     TABLE_NAME       = aws_dynamodb_table.user_access.name
