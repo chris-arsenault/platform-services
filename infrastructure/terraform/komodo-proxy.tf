@@ -37,7 +37,7 @@ resource "aws_iam_role_policy" "komodo_proxy_ssm" {
         "ssm:GetParameter"
       ]
       Resource = [
-        "arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/platform/*"
+        "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/platform/*"
       ]
     }]
   })

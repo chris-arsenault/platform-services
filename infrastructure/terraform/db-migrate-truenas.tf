@@ -44,12 +44,12 @@ resource "aws_iam_role_policy" "db_migrate_truenas_ssm" {
       {
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = ["arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/platform/truenas/*"]
+        Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/platform/truenas/*"]
       },
       {
         Effect   = "Allow"
         Action   = ["ssm:PutParameter", "ssm:GetParameter"]
-        Resource = ["arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/platform/truenas-db/*"]
+        Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/platform/truenas-db/*"]
       }
     ]
   })

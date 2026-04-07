@@ -29,7 +29,7 @@ resource "aws_ssm_parameter" "cognito_domain" {
 resource "aws_ssm_parameter" "cognito_issuer_url" {
   name  = "${local.ssm_prefix}/cognito/issuer-url"
   type  = "String"
-  value = "https://cognito-idp.${data.aws_region.current.name}.amazonaws.com/${module.cognito.user_pool_id}"
+  value = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${module.cognito.user_pool_id}"
 }
 
 # Per-app client IDs
