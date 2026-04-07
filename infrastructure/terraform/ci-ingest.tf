@@ -20,7 +20,7 @@ module "ci_ingest" {
     INGEST_TOKEN  = random_password.ci_ingest_token.result
   }
 
-  iam_policy = jsonencode({
+  iam_policy = [jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -29,7 +29,7 @@ module "ci_ingest" {
         Resource = ["arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/platform/db/platform/*"]
       }
     ]
-  })
+  })]
 
   lambdas = {
     ingest = {
